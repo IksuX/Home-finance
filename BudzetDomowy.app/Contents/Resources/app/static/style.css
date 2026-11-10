@@ -177,3 +177,24 @@ tr:hover .note-in, .note-in:focus { border-bottom-color: var(--line) !important;
 .flow .op { align-self: center; font-size: 22px; color: var(--muted); width: 16px; text-align: center; }
 
 .rowact { visibility: hidden; border: 0; background: none; color: var(--accent); cursor: pointer; padding: 0; font: inherit; font-size: 12px; } tr:hover .rowact, .rowact:focus { visibility: visible; }
+
+.txt .ck { width: 28px; padding-right: 0; } .txt .ck input { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
+.txt tr.sel td { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.bulkbar { position: sticky; top: 8px; z-index: 5; display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; margin-bottom: 12px; padding: 10px 14px; border-radius: 10px; background: var(--raised); border: 1px solid var(--accent); box-shadow: 0 6px 20px rgba(0,0,0,.08); }
+.bulkbar[hidden] { display: none; } .bulkbar .grp { display: flex; gap: 6px; align-items: center; } .bulkbar select { max-width: 220px; }
+.form label.check { display: flex; flex-direction: row; gap: 8px; align-items: center; font-size: 13px; color: var(--ink); } .form label.check[hidden] { display: none; }
+.form label.check input { width: 16px; height: 16px; accent-color: var(--accent); }
+.plabel { min-width: 150px; border: 0; background: none; font: inherit; font-weight: 600; color: var(--ink); cursor: pointer; padding: 4px 8px; border-radius: 7px; text-decoration: underline dotted var(--muted); text-underline-offset: 4px; }
+.plabel:hover { background: var(--line2); }
+.presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.seg.small button { padding: 3px 10px; font-size: 13px; }
+table.cmp td, table.cmp th { padding-top: 6px; padding-bottom: 6px; } tr.click { cursor: pointer; } tr.click:hover td { background: var(--line2); }
+table.cmp .dbar { width: 22%; } .dbar div { height: 8px; border-radius: 4px; } .dbar .up { background: var(--bad); opacity: .7; } .dbar .down { background: var(--good); opacity: .7; }
+.chip { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 99px; background: var(--line2); color: var(--ink2); white-space: nowrap; }
+.chip.good { background: color-mix(in srgb, var(--good) 14%, transparent); color: var(--good); }
+.chip.bad { background: color-mix(in srgb, var(--bad) 14%, transparent); color: var(--bad); }
+.chip.warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+table.plan td { vertical-align: middle; padding-top: 8px; padding-bottom: 8px; }
+table.plan tr.mhead td { padding-top: 16px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); border-bottom: 1px solid var(--line); }
+table.plan tr.done td { opacity: .6; } table.plan tr.done td:last-child { opacity: 1; }

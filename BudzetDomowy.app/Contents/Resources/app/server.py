@@ -6,6 +6,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import core
 import receipts as rc
+import plan as pl
 
 PORT = int(os.environ.get("BUDZET_PORT", "8765"))
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -167,7 +168,7 @@ def product_rows(conn, person=None):
 def api(method, path, q, body, raw, headers):
     conn = core.connect()
     try:
-        m = re.match(r"^/api/(\w+)(?:/(\d+))?(?:/(\w+))?$", path.replace("/receipts/rereadall", "/receipts/0/rereadall").replace("/settlements/preview", "/settlements/0/preview").replace("/rules/preview", "/rules/0/preview").replace("/categories/order", "/categories/0/order"))
+        m = re.match(r"^/api/(\w+)(?:/(\d+))?(?:/(\w+))?$", path.replace("/receipts/rereadall", "/receipts/0/rereadall").replace("/settlements/preview", "/settlements/0/preview").replace("/rules/preview", "/rules/0/preview").replace("/categories/order", "/categories/0/order").replace("/transactions/bulk", "/transactions/0/bulk").replace("/rules/conflicts", "/rules/0/conflicts"))
         if not m:
             raise ApiError("Nieznany adres.")
         res, oid, sub = m.group(1), int(m.group(2)) if m.group(2) else None, m.group(3)
@@ -184,7 +185,7 @@ def api(method, path, q, body, raw, headers):
         if res == "summary":
             return core.summary(conn, q.get("from"), q.get("to"), int(q["person"]) if q.get("person") else None)
 
-        if res == "transactions" and method == "GET" and not oid:
+        if res == "transactions" and method == "GET" and not oid and not q.get("ids_only"):
             sql, args = tx_query(q)
             total = conn.execute("SELECT COUNT(*) n, IFNULL(SUM(t.amount),0) s " + sql, args).fetchone()
             lim, off = int(q.get("limit", 200)), int(q.get("offset", 0))
@@ -197,6 +198,29 @@ def api(method, path, q, body, raw, headers):
                 d["phrases"] = core.rule_phrases(d["description"], d["counterparty"])
             return dict(total=total["n"], sum=total["s"], rows=data)
 
+        if res == "transactions" and method == "POST" and sub == "bulk":   # edycja grupowa
+            ids = [int(i) for i in body.get("ids") or []]
+            if not ids:
+                raise ApiError("Nie zaznaczono żadnej transakcji.")
+            changed = skipped = 0
+            for part in range(0, len(ids), 500):
+                chunk = ids[part:part + 500]
+                ph = ",".join("?" * len(chunk))
+                if "category_id" in body:
+                    cid = body["category_id"] or None
+                    k = conn.execute("SELECT kind FROM categories WHERE id=?", (cid,)).fetchone() if cid else None
+                    for t in conn.execute(f"SELECT id,amount FROM transactions WHERE id IN ({ph})", chunk).fetchall():
+                        if k and not core.sign_ok(k["kind"], t["amount"]):
+                            skipped += 1; continue
+                        conn.execute("UPDATE transactions SET category_id=?, cat_source='manual' WHERE id=?", (cid, t["id"])); changed += 1
+                if "note" in body:
+                    note = (body["note"] or "").strip() or None
+                    changed += conn.execute(f"UPDATE transactions SET note=? WHERE id IN ({ph})", [note] + chunk).rowcount
+            conn.commit()
+            return dict(changed=changed, skipped=skipped)
+        if res == "transactions" and method == "GET" and q.get("ids_only"):
+            sql, args = tx_query(q)
+            return [r["id"] for r in conn.execute("SELECT t.id " + sql, args)]
         if res == "transactions" and method == "POST" and not oid:      # wpis ręczny, którego nie ma w wyciągach
             import uuid
             d = core.parse_date(body.get("date"))
@@ -246,6 +270,33 @@ def api(method, path, q, body, raw, headers):
             conn.commit()
             return {"ok": True}
 
+        if res == "plan" and method == "GET":
+            return pl.report(conn, max(1, min(24, int(q.get("months") or 6))), int(q["person"]) if q.get("person") else None)
+        if res == "plans" and method == "POST" and oid and sub == "mark":
+            due = core.parse_date(body.get("due"))
+            if body.get("status") in ("paid", "skipped"):
+                conn.execute("INSERT OR REPLACE INTO plan_marks(plan_id,due,status) VALUES(?,?,?)", (oid, due, body["status"]))
+            else:
+                conn.execute("DELETE FROM plan_marks WHERE plan_id=? AND due=?", (oid, due))
+            conn.commit()
+            return {"ok": True}
+        if res == "plans" and method == "POST":
+            try:
+                return {"id": pl.save(conn, body, oid)}
+            except ValueError as e:
+                raise ApiError(str(e))
+        if res == "plans" and method == "DELETE":
+            conn.execute("DELETE FROM plans WHERE id=?", (oid,)); conn.execute("DELETE FROM plan_marks WHERE plan_id=?", (oid,)); conn.commit()
+            return {"ok": True}
+        if res == "plan_ignore" and method == "POST":
+            if body.get("undo"):
+                conn.execute("DELETE FROM plan_ignore WHERE key=?", (body.get("key"),))
+            else:
+                conn.execute("INSERT OR IGNORE INTO plan_ignore(key) VALUES(?)", (body.get("key"),))
+            conn.commit()
+            return {"ok": True}
+        if res == "rules" and method == "GET" and sub == "conflicts":
+            return {str(k): v for k, v in core.rule_conflicts(conn).items()}
         if res == "rules" and method == "POST" and sub == "preview":
             rx = core.rule_regex(body.get("pattern") or "")
             if not rx or len(core.norm(body.get("pattern"))) < 3:
@@ -255,9 +306,13 @@ def api(method, path, q, body, raw, headers):
             hits = [dict(r) for r in conn.execute("SELECT t.id,t.date,t.amount,t.description,t.counterparty,t.category_id,t.cat_source,c.name category FROM transactions t "
                                                   "LEFT JOIN categories c ON c.id=t.category_id ORDER BY t.date DESC")
                     if rx.search(core.norm(f"{r['counterparty'] or ''} {r['description'] or ''}")) and core.sign_ok(kind, r["amount"])]
-            return dict(count=len(hits), manual=sum(1 for h in hits if h["cat_source"] == "manual"), rows=hits[:8],
-                        processor=core.is_processor(body.get("pattern")))
-        if res == "rules" and method == "POST":
+            sign = {"expense": -1, "income": 1}.get(kind, 0)
+            conf = core.rule_conflicts(conn, dict(pattern=body.get("pattern"), cid=body.get("category_id"), sign=sign)).get(None, [])
+            return dict(count=len(hits), manual=sum(1 for h in hits if h["cat_source"] == "manual"),
+                        protected=sum(1 for h in hits if h["cat_source"] in core.PROTECTED),
+                        same=sum(1 for h in hits if h["category_id"] == body.get("category_id")),
+                        rows=hits[:8], conflicts=conf, replaces=next((dict(r) for r in conn.execute("SELECT r.pattern,c.name category FROM rules r JOIN categories c ON c.id=r.category_id WHERE r.user=1 AND r.pattern=?", (core.norm(body.get("pattern")),))), None), processor=core.is_processor(body.get("pattern")))
+        if res == "rules" and method == "POST" and not oid:
             pat = core.norm(body.get("pattern"))
             if len(pat) < 3:
                 raise ApiError("Fraza reguły musi mieć co najmniej 3 znaki.")
@@ -265,6 +320,15 @@ def api(method, path, q, body, raw, headers):
             sign = {"expense": -1, "income": 1}.get(k["kind"] if k else None, 0)      # reguła działa tylko na pasującą stronę
             conn.execute("DELETE FROM rules WHERE user=1 AND pattern=?", (pat,))
             conn.execute("INSERT INTO rules(pattern,category_id,sign,user) VALUES(?,?,?,1)", (pat, int(body["category_id"]), sign))
+            if body.get("override"):
+                core.apply_rule_everywhere(conn, pat, int(body["category_id"]))
+            conn.commit()
+            return {"changed": core.recategorize(conn)}
+        if res == "rules" and method == "POST" and oid and sub == "apply":
+            r = conn.execute("SELECT pattern,category_id FROM rules WHERE id=? AND user=1", (oid,)).fetchone()
+            if not r:
+                raise ApiError("Nie ma takiej reguły.")
+            core.apply_rule_everywhere(conn, r["pattern"], r["category_id"])
             conn.commit()
             return {"changed": core.recategorize(conn)}
         if res == "rules" and method == "DELETE":
@@ -607,7 +671,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    core.init_db().close()
+    c0 = core.init_db(); pl.ensure(c0); c0.close()
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     print(f"Budżet domowy {core.VERSION}: http://127.0.0.1:{PORT}", flush=True)
     srv.serve_forever()

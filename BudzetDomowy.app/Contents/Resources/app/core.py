@@ -3,7 +3,7 @@ import csv, hashlib, io, os, re, sqlite3, unicodedata
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
-VERSION = "0.9.4"
+VERSION = "0.9.6"
 DATA_DIR = os.environ.get("BUDZET_DATA") or os.path.expanduser("~/Library/Application Support/BudzetDomowy")
 DB_PATH = os.path.join(DATA_DIR, "budzet.db")
 RECEIPT_DIR = os.path.join(DATA_DIR, "paragony")
@@ -275,6 +275,62 @@ def recategorize(conn, only_auto=True):
             conn.execute("UPDATE transactions SET category_id=?, cat_source=? WHERE id=?", (cid, src, r["id"]))
             n += 1
     conn.commit()
+    return n
+
+
+PROTECTED = ("paired", "transfer", "group")      # kategorie z parowania przelewów i rozliczeń – reguły ich nie ruszają
+
+
+def _user_rules(conn, extra=None):
+    """Reguły użytkownika w kolejności pierwszeństwa (dłuższa fraza wygrywa, przy równej – ta z ograniczeniem do znaku)."""
+    kind = {r["id"]: r["kind"] for r in conn.execute("SELECT id,kind FROM categories")}
+    name = {r["id"]: r["name"] for r in conn.execute("SELECT id,name FROM categories")}
+    out = []
+    for r in conn.execute("SELECT r.id,r.pattern,r.category_id,r.sign FROM rules r WHERE r.user=1"):
+        rx = rule_regex(r["pattern"])
+        if rx and (not extra or norm(r["pattern"]) != norm(extra["pattern"])):
+            out.append(dict(id=r["id"], pattern=r["pattern"], cid=r["category_id"], sign=r["sign"], rx=rx))
+    if extra:
+        out.append(dict(extra, id=None, rx=rule_regex(extra["pattern"])))
+    out.sort(key=lambda x: (-len(norm(x["pattern"])), -abs(x["sign"] or 0), x["id"] is None))
+    for x in out:
+        x["category"] = name.get(x["cid"]); x["kind"] = kind.get(x["cid"])
+    return out
+
+
+def _hits(rule, t, amount):
+    return (not rule["sign"] or (amount > 0) == (rule["sign"] > 0)) and rule["rx"].search(t) and sign_ok(rule["kind"], amount)
+
+
+def rule_conflicts(conn, extra=None):
+    """Transakcje, do których pasuje kilka reguł użytkownika z różnymi kategoriami.
+    Zwraca {id reguły lub None dla nowej: [{pattern, category, n, wins}]} – wins mówi, czy ta reguła wygrywa z tamtą."""
+    rules = _user_rules(conn, extra)
+    pairs = {}
+    for r in conn.execute("SELECT description,counterparty,amount FROM transactions"):
+        t = norm(f"{r['counterparty'] or ''} {r['description'] or ''}")
+        m = [x for x in rules if _hits(x, t, r["amount"])]
+        for i, a in enumerate(m):
+            for b in m[i + 1:]:
+                if a["cid"] != b["cid"]:
+                    k = (a["id"], b["id"]); pairs[k] = pairs.get(k, 0) + 1
+    by = {x["id"]: x for x in rules}
+    out = {}
+    for (a, b), n in pairs.items():      # a stoi wyżej w kolejności, więc wygrywa
+        out.setdefault(a, []).append(dict(pattern=by[b]["pattern"], category=by[b]["category"], n=n, wins=True, id=b))
+        out.setdefault(b, []).append(dict(pattern=by[a]["pattern"], category=by[a]["category"], n=n, wins=False, id=a))
+    return out
+
+
+def apply_rule_everywhere(conn, pattern, category_id):
+    """Zdejmuje ręczną kategorię z transakcji pasujących do reguły, żeby reguła mogła je przeliczyć."""
+    rx = rule_regex(pattern)
+    k = conn.execute("SELECT kind FROM categories WHERE id=?", (category_id,)).fetchone()
+    sign = {"expense": -1, "income": 1}.get(k["kind"] if k else None, 0)
+    n = 0
+    for r in conn.execute("SELECT id,description,counterparty,amount FROM transactions WHERE cat_source='manual'").fetchall():
+        if (not sign or (r["amount"] > 0) == (sign > 0)) and rx.search(norm(f"{r['counterparty'] or ''} {r['description'] or ''}")) and sign_ok(k["kind"] if k else None, r["amount"]):
+            conn.execute("UPDATE transactions SET cat_source='rule' WHERE id=?", (r["id"],)); n += 1
     return n
 
 
@@ -1164,7 +1220,8 @@ def summary(conn, dfrom, dto, person=None):
     bounds = conn.execute("SELECT MIN(date) a, MAX(date) b FROM transactions").fetchone()
     dfrom = dfrom or bounds["a"] or date.today().isoformat()
     dto = dto or bounds["b"] or date.today().isoformat()
-    months = month_range(date.fromisoformat(dto), 12)
+    span = (date.fromisoformat(dto).year - date.fromisoformat(dfrom).year) * 12 + date.fromisoformat(dto).month - date.fromisoformat(dfrom).month + 1
+    months = month_range(date.fromisoformat(dto), max(12, min(span, 120)))      # wykres miesięczny obejmuje cały wybrany zakres (do 10 lat)
     all_e = entries(conn, months[0] + "-01", None, None)
     wide = entries(conn, min(dfrom, months[0] + "-01"), dto, None) if dfrom < months[0] + "-01" else all_e
     sel = [e for e in wide if dfrom <= e["date"] <= dto and (not person or e["person"] == person)]
