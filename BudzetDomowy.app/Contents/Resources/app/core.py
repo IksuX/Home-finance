@@ -3,8 +3,9 @@ import csv, hashlib, io, os, re, sqlite3, unicodedata
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
-VERSION = "0.9.6"
-DATA_DIR = os.environ.get("BUDZET_DATA") or os.path.expanduser("~/Library/Application Support/BudzetDomowy")
+VERSION = "0.9.7"
+DATA_DIR = os.environ.get("BUDZET_DATA") or (os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "BudzetDomowy") if os.name == "nt"
+                                             else os.path.expanduser("~/Library/Application Support/BudzetDomowy"))
 DB_PATH = os.path.join(DATA_DIR, "budzet.db")
 RECEIPT_DIR = os.path.join(DATA_DIR, "paragony")
 
@@ -114,6 +115,7 @@ def connect():
     conn = sqlite3.connect(DB_PATH, timeout=15)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.create_function("NORM", 1, lambda v: norm(v or ""), deterministic=True)
     return conn
 
 

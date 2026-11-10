@@ -1,11 +1,14 @@
 """Paragony: odczyt tekstu (OCR) i rozbijanie na pozycje."""
-import json, os, re, shutil, subprocess
+import json, os, re, shutil, subprocess, sys
 from datetime import date, timedelta
 import core
 from core import norm
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PATH = os.environ.get("PATH", "") + ":/opt/homebrew/bin:/usr/local/bin"
+IS_MAC, IS_WIN = sys.platform == "darwin", os.name == "nt"
+PATH = os.environ.get("PATH", "") + ("" if IS_WIN else ":/opt/homebrew/bin:/usr/local/bin")
+if IS_WIN:      # Tesseract z typowego instalatora, jeśli ktoś go ma
+    PATH += os.pathsep + os.pathsep.join(os.path.join(os.environ.get(v, ""), "Tesseract-OCR") for v in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA") if os.environ.get(v))
 
 STORES = ["BIEDRONKA", "LIDL", "KAUFLAND", "AUCHAN", "CARREFOUR", "ZABKA", "ROSSMANN", "HEBE", "DINO", "STOKROTKA", "NETTO", "ALDI",
           "LEWIATAN", "SPOLEM", "INTERMARCHE", "ORLEN", "SHELL", "CIRCLE K", "CASTORAMA", "LEROY MERLIN", "IKEA", "PEPCO", "ACTION",
@@ -47,12 +50,19 @@ def money(s):
 
 # ---------- OCR ----------
 def _run(cmd, timeout=120):
-    return subprocess.run(cmd, capture_output=True, timeout=timeout, env=dict(os.environ, PATH=PATH))
+    extra = {"creationflags": 0x08000000} if IS_WIN else {}      # bez migającego okna konsoli
+    return subprocess.run(cmd, capture_output=True, timeout=timeout, env=dict(os.environ, PATH=PATH), **extra)
+
+
+def _winocr(*args, timeout=180):
+    """Wbudowany w Windows 10/11 odczyt tekstu (Windows.Media.Ocr) przez PowerShell – bez instalowania niczego."""
+    ps = shutil.which("powershell", path=PATH) or os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+    return _run([ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", os.path.join(HERE, "ocr-win.ps1")] + list(args), timeout)
 
 
 def _vision_cmd():
     """Zwraca polecenie uruchamiające pomocnika Vision (kompiluje go przy pierwszym użyciu)."""
-    if os.uname().sysname != "Darwin":
+    if not IS_MAC:
         return None
     src, binary = os.path.join(HERE, "ocr.swift"), os.path.join(core.DATA_DIR, "ocr-helper")
     if os.path.exists(binary) and os.path.getmtime(binary) >= os.path.getmtime(src):
@@ -68,8 +78,21 @@ def _vision_cmd():
         return None
 
 
+_WIN_OK = None
+
+
 def engine_status():
-    if os.uname().sysname == "Darwin":
+    global _WIN_OK
+    if IS_WIN:
+        if _WIN_OK is None:
+            try:
+                r = _winocr("-Check", timeout=40)
+                _WIN_OK = r.returncode == 0 and b"ok" in r.stdout
+            except Exception:
+                _WIN_OK = False
+        if _WIN_OK:
+            return {"engine": "windows", "ok": True}
+    if IS_MAC:
         try:
             if _run(["xcode-select", "-p"], 10).returncode == 0:
                 return {"engine": "vision", "ok": True}
@@ -83,7 +106,9 @@ def engine_status():
 def make_preview(src, dst):
     """Podgląd JPG do wyświetlania w przeglądarce (HEIC i PDF nie wszędzie się wyświetlają)."""
     try:
-        if os.uname().sysname == "Darwin":
+        if IS_WIN and _winocr("-Preview", src, dst, timeout=90).returncode == 0 and os.path.exists(dst):
+            return True
+        if IS_MAC:
             if _run(["sips", "-s", "format", "jpeg", "-Z", "2400", src, "--out", dst], 60).returncode == 0:
                 return True
         if src.lower().endswith(".pdf") and shutil.which("pdftoppm", path=PATH):
@@ -104,6 +129,13 @@ def ocr(path, preview=None):
             r = _run(cmd + [path])
             if r.returncode == 0:
                 return json.loads(r.stdout)["lines"], "vision"
+        except Exception:
+            pass
+    if IS_WIN:
+        try:
+            r = _winocr(path)
+            if r.returncode == 0:
+                return json.loads(r.stdout.decode("utf-8-sig"))["lines"], "windows"
         except Exception:
             pass
     if shutil.which("tesseract", path=PATH):

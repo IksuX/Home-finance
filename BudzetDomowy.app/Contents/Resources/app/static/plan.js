@@ -1,5 +1,6 @@
 // ---------- plan wydatków i przychodów ----------
 const PL = { months: 6, data: null, all: false };
+const PLFREQ = { once: 'jednorazowo', weekly: 'co tydzień', biweekly: 'co 2 tygodnie', monthly: 'co miesiąc', bimonthly: 'co 2 miesiące', quarterly: 'co kwartał', halfyear: 'co pół roku', yearly: 'co rok' };
 const MGEN = ['stycznia', 'lutego', 'marca', 'kwietnia', 'maja', 'czerwca', 'lipca', 'sierpnia', 'września', 'października', 'listopada', 'grudnia'];
 const fmtDay = s => { const [y, m, d] = s.split('-').map(Number); return `${d} ${MSHORT[m - 1]}${y !== new Date().getFullYear() ? ' ' + y : ''}`; };
 const daysTo = s => Math.round((new Date(s + 'T12:00:00') - new Date(new Date().toISOString().slice(0, 10) + 'T12:00:00')) / 864e5);
@@ -24,7 +25,7 @@ async function vPlan(main) {
   if (d.suggestions.length) {
     const exp = d.suggestions.filter(s => s.amount < 0);
     h += `<div class="panel"><h2 style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">Wykryte powtarzające się płatności<span>${d.suggestions.length} – na podstawie wyciągów</span>${d.suggestions.length > 1 ? `<button class="btn small" style="margin-left:auto" onclick="acceptAll()">Dodaj wszystkie</button>` : ''}</h2>
-      <p class="muted small" style="margin:-6px 0 10px">Program znalazł odbiorców, którym płacicie regularnie. Dodaj je do planu, żeby widzieć je w prognozie i wiedzieć, czy zostały zapłacone. Kwota w planie to mediana z ostatnich płatności.</p>
+      <p class="muted small" style="margin:-6px 0 10px">Program znalazł odbiorców, którym płacicie regularnie. Dodaj je do planu, żeby widzieć je w prognozie i wiedzieć, czy zostały zapłacone. Kwota w planie to mediana z ostatnich płatności. Czegoś brakuje? W <a href="#transakcje" onclick="go('transakcje');return false">Transakcjach</a> najedź na transakcję i wybierz „Powtarza się – dodaj do planu” albo zaznacz kilka i użyj „Dodaj do planu jako cykliczne”.</p>
       <table class="plan">${d.suggestions.map((s, i) => `<tr><td><b style="font-weight:600">${esc(s.name)}</b><div class="muted small">${s.freq_label} · ${s.count}× · ostatnio ${fmtDay(s.last)}</div></td>
         <td class="small">następna ok. <b class="num" style="font-weight:600">${fmtDay(s.next)}</b></td>
         <td class="r num ${s.amount > 0 ? 'pos' : ''}">${s.variable ? '<span class="muted small">ok.</span> ' : ''}${s.amount > 0 ? '+' : ''}${zl(s.amount)}${s.variable ? `<div class="muted small">od ${zl(Math.abs(s.min) < Math.abs(s.max) ? s.min : s.max)} do ${zl(Math.abs(s.min) < Math.abs(s.max) ? s.max : s.min)}</div>` : ''}</td>
@@ -96,12 +97,14 @@ async function delPlan(id) {
 function planDialog(arg) {
   const p = typeof arg === 'number' ? PL.data.plans.find(x => x.id === arg) : null;
   const kind = p ? (p.amount > 0 ? 'income' : 'expense') : arg && arg.kind ? arg.kind : arg && arg.amount > 0 ? 'income' : 'expense';
-  const today = new Date().toISOString().slice(0, 10), v = p || {};
-  const freqs = Object.entries(PL.data.freqs).map(([k, l]) => `<option value="${k}" ${k === (v.freq || 'once') ? 'selected' : ''}>${l}</option>`).join('');
+  const pre = arg && typeof arg === 'object' && arg.name ? arg : null;      // propozycja z zaznaczonych transakcji
+  const today = new Date().toISOString().slice(0, 10), v = p || pre || {};
+  const freqs = Object.entries(PLFREQ).map(([k, l]) => `<option value="${k}" ${k === (v.freq || 'once') ? 'selected' : ''}>${l}</option>`).join('');
   modal(`<h2>${p ? 'Zmień pozycję planu' : kind === 'income' ? 'Planowany wpływ' : 'Planowany wydatek'}</h2>
-    <p>${kind === 'income' ? 'Np. premia, zwrot podatku, stałe wynagrodzenie.' : 'Np. ubezpieczenie samochodu, przegląd, wakacje, prezenty na święta, rata.'} Pozycja pojawi się w terminach i w prognozie.</p>
+    <p>${pre ? `Na podstawie ${pre.count} ${plural(pre.count, 'wystąpienia', 'wystąpień', 'wystąpień')} na wyciągach${pre.guessed ? ' – sprawdź, jak często się powtarza' : ''}. Kwota to mediana z ostatnich, pierwszy termin to następne spodziewane wystąpienie.`
+      : kind === 'income' ? 'Np. premia, zwrot podatku, stałe wynagrodzenie.' : 'Np. ubezpieczenie samochodu, przegląd, wakacje, prezenty na święta, rata.'} Pozycja pojawi się w terminach i w prognozie.</p>
     <form class="form" onsubmit="savePlan(event,${p ? p.id : 'null'})">
-      ${p ? '' : `<div class="seg" role="group" style="justify-self:start"><button type="button" class="${kind === 'expense' ? 'on' : ''}" onclick="planDialog({kind:'expense'})">Wydatek</button><button type="button" class="${kind === 'income' ? 'on' : ''}" onclick="planDialog({kind:'income'})">Wpływ</button></div>`}
+      ${p || pre ? '' : `<div class="seg" role="group" style="justify-self:start"><button type="button" class="${kind === 'expense' ? 'on' : ''}" onclick="planDialog({kind:'expense'})">Wydatek</button><button type="button" class="${kind === 'income' ? 'on' : ''}" onclick="planDialog({kind:'income'})">Wpływ</button></div>`}
       <input type="hidden" name="kind" value="${kind}">
       <label>Nazwa<input type="text" name="n" value="${esc(v.name || '')}" required autofocus placeholder="${kind === 'income' ? 'np. Zwrot podatku' : 'np. OC i AC samochodu'}"></label>
       <span style="display:flex;gap:10px"><label style="flex:1">Kwota, zł<input type="text" name="a" inputmode="decimal" required style="text-align:right" value="${v.amount ? (Math.abs(v.amount) / 100).toFixed(2).replace('.', ',') : ''}"></label>
@@ -117,10 +120,14 @@ function planDialog(arg) {
 }
 async function savePlan(ev, id) {
   ev.preventDefault(); const f = ev.target, amt = Math.abs(toGr(f.a.value));
-  const p = id ? PL.data.plans.find(x => x.id === id) : null;
+  const p = id && PL.data ? PL.data.plans.find(x => x.id === id) : null;
   try {
     await api('plans' + (id ? '/' + id : ''), { body: { name: f.n.value, amount: f.kind.value === 'income' ? amt : -amt, start: f.d.value, freq: f.f.value, until: f.u.value || null,
       category_id: +f.c.value || null, person_id: +f.p.value || null, phrase: f.ph.value, variable: f.vr.checked, note: f.no.value, source: p ? p.source : 'manual' } });
-    closeModal(); await render(); toast(id ? 'Zapisano.' : 'Dodano do planu.');
+    closeModal(); if (view === 'transakcje') { TX.sel.clear(); await render(); toast('Dodano do planu.', 'Otwórz Plan', () => go('plan')); } else { await render(); toast(id ? 'Zapisano.' : 'Dodano do planu.'); }
   } catch (e) { toast(e.message); }
+}
+
+async function planFromTx(ids) {
+  try { const s = await api('plans/from', { body: { ids } }); planDialog(s); } catch (e) { toast(e.message); }
 }

@@ -125,8 +125,8 @@ def tx_query(q):
     if q.get("q"):
         for w in q["q"].split():
             amt = core.parse_amount(w) if re.fullmatch(r"\d+([.,]\d{1,2})?", w) else None      # liczba = szukaj też po kwocie
-            sql += " AND (t.description LIKE ? OR t.counterparty LIKE ? OR t.note LIKE ?" + (" OR ABS(t.amount)=?" if amt else "") + ")"
-            args += [f"%{w}%"] * 3 + ([amt] if amt else [])
+            sql += " AND (NORM(IFNULL(t.description,'')||' '||IFNULL(t.counterparty,'')||' '||IFNULL(t.note,'')) LIKE ?" + (" OR ABS(t.amount)=?" if amt else "") + ")"
+            args += [f"%{core.norm(w)}%"] + ([amt] if amt else [])      # bez polskich znaków i wielkości liter: „szkola” znajdzie „SZKOŁA”
     return sql, args
 
 
@@ -168,7 +168,7 @@ def product_rows(conn, person=None):
 def api(method, path, q, body, raw, headers):
     conn = core.connect()
     try:
-        m = re.match(r"^/api/(\w+)(?:/(\d+))?(?:/(\w+))?$", path.replace("/receipts/rereadall", "/receipts/0/rereadall").replace("/settlements/preview", "/settlements/0/preview").replace("/rules/preview", "/rules/0/preview").replace("/categories/order", "/categories/0/order").replace("/transactions/bulk", "/transactions/0/bulk").replace("/rules/conflicts", "/rules/0/conflicts"))
+        m = re.match(r"^/api/(\w+)(?:/(\d+))?(?:/(\w+))?$", path.replace("/receipts/rereadall", "/receipts/0/rereadall").replace("/settlements/preview", "/settlements/0/preview").replace("/rules/preview", "/rules/0/preview").replace("/categories/order", "/categories/0/order").replace("/transactions/bulk", "/transactions/0/bulk").replace("/rules/conflicts", "/rules/0/conflicts").replace("/plans/from", "/plans/0/from"))
         if not m:
             raise ApiError("Nieznany adres.")
         res, oid, sub = m.group(1), int(m.group(2)) if m.group(2) else None, m.group(3)
@@ -180,7 +180,7 @@ def api(method, path, q, body, raw, headers):
                         categories=rows(conn.execute("SELECT * FROM categories ORDER BY sort,id")),
                         rules=rows(conn.execute("SELECT r.*, c.name category FROM rules r JOIN categories c ON c.id=r.category_id WHERE r.user=1 ORDER BY r.id DESC")),
                         imports=rows(conn.execute("SELECT * FROM imports ORDER BY id DESC LIMIT 20")),
-                        first=b["a"], last=b["b"], tx_count=b["n"], ocr=rc.engine_status(), data_dir=core.DATA_DIR, kinds=core.KINDS, atm_feeds_cash=core.atm_feeds_cash(conn))
+                        first=b["a"], last=b["b"], tx_count=b["n"], ocr=rc.engine_status(), platform="win" if os.name == "nt" else "mac", data_dir=core.DATA_DIR, kinds=core.KINDS, atm_feeds_cash=core.atm_feeds_cash(conn))
 
         if res == "summary":
             return core.summary(conn, q.get("from"), q.get("to"), int(q["person"]) if q.get("person") else None)
@@ -272,6 +272,11 @@ def api(method, path, q, body, raw, headers):
 
         if res == "plan" and method == "GET":
             return pl.report(conn, max(1, min(24, int(q.get("months") or 6))), int(q["person"]) if q.get("person") else None)
+        if res == "plans" and method == "POST" and sub == "from":
+            try:
+                return pl.from_transactions(conn, [int(i) for i in body.get("ids") or []][:2000])
+            except ValueError as e:
+                raise ApiError(str(e))
         if res == "plans" and method == "POST" and oid and sub == "mark":
             due = core.parse_date(body.get("due"))
             if body.get("status") in ("paid", "skipped"):
@@ -280,7 +285,7 @@ def api(method, path, q, body, raw, headers):
                 conn.execute("DELETE FROM plan_marks WHERE plan_id=? AND due=?", (oid, due))
             conn.commit()
             return {"ok": True}
-        if res == "plans" and method == "POST":
+        if res == "plans" and method == "POST" and sub is None:
             try:
                 return {"id": pl.save(conn, body, oid)}
             except ValueError as e:
@@ -656,7 +661,8 @@ class Handler(BaseHTTPRequestHandler):
             f = os.path.join(STATIC, name)
             if os.path.isfile(f):
                 with open(f, "rb") as fh:
-                    return self.send(200, fh.read(), (mimetypes.guess_type(f)[0] or "text/plain") + "; charset=utf-8")
+                    kind = {".js": "text/javascript", ".css": "text/css", ".html": "text/html", ".svg": "image/svg+xml", ".json": "application/json"}.get(os.path.splitext(f)[1].lower())
+                    return self.send(200, fh.read(), (kind or mimetypes.guess_type(f)[0] or "text/plain") + "; charset=utf-8")      # Windows potrafi podać zły typ z rejestru
             self.send(404, b"", "text/plain")
         except ApiError as e:
             self.send(400, {"error": str(e)})

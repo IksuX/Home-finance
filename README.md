@@ -1,7 +1,7 @@
-# Budżet domowy 0.9.6
+# Budżet domowy 0.9.7
 
-Aplikacja na Maca do analizy domowego budżetu na podstawie wyciągów bankowych (mBank, ING, MT940, Revolut) i skanów paragonów.
-Gotowy instalator: `dist/BudzetDomowy-0.9.6.zip`. Kod źródłowy: `BudzetDomowy.app/Contents/Resources/app`.
+Aplikacja na Maca i Windows do analizy domowego budżetu na podstawie wyciągów bankowych (mBank, ING, MT940, Revolut) i skanów paragonów.
+Gotowe paczki: `dist/BudzetDomowy-0.9.7.zip` (Mac) i `dist/BudzetDomowy-0.9.7-windows.zip` (Windows 10/11, z wbudowanym Pythonem; instrukcja w CZYTAJ.txt w archiwum). Program uruchamiający dla Windows: `windows/launcher.c`. Kod źródłowy: `BudzetDomowy.app/Contents/Resources/app`.
 
 ## Zrzuty ekranu (dane przykładowe)
 
@@ -97,6 +97,14 @@ Co nowego w 0.9.3
   Wpisz w Ustawieniach > Osoby imię i nazwisko każdej osoby tak, jak widnieje na przelewach – wtedy przelewy do siebie
   i między Wami są rozpoznawane po nazwisku, a wpłaty od klientów i płatności dla innych klientów mBanku liczą się normalnie.
 - Nowa kategoria przychodu "Wypłaty z firmy".
+
+Co nowego w 0.9.7
+- Wersja na Windows 10 i 11 (osobne archiwum BudzetDomowy-0.9.7-windows.zip).
+- Ręczne oznaczanie cyklicznych transakcji: w Transakcjach „Powtarza się – dodaj do planu” przy transakcji
+  albo „Dodaj do planu jako cykliczne” dla zaznaczonych. Program sam policzy, jak często się powtarza i ile zwykle wynosi.
+- Lepsze wykrywanie stałych wpływów i płatności, które przychodzą w kilku przelewach albo z dodatkowymi
+  wypłatami w trakcie miesiąca (np. pensja w dwóch częściach, ZFŚS, nagrody).
+- Wyszukiwanie transakcji nie zwraca uwagi na polskie znaki i wielkość liter („szkola” znajdzie „SZKOŁA”).
 
 Co nowego w 0.9.6
 - Nowa zakładka Plan:

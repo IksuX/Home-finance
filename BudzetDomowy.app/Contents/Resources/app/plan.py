@@ -78,6 +78,54 @@ def _matcher(p):
     return lambda t: (t["amount"] > 0) == (p["amount"] > 0) and bool(rx and rx.search(_text(t)) or key and core.merchant(t["description"], t["counterparty"]) == key)
 
 
+def _by_gaps(byday, days):
+    """Stały odstęp między płatnościami: abonamenty, raty, czynsz."""
+    ds = [date.fromisoformat(d) for d in days]
+    gaps = [(b - a).days for a, b in zip(ds, ds[1:])]
+    band = next((b for b in BANDS if b[1] <= statistics.median(gaps) <= b[2]), None)
+    if not band:
+        return None
+    freq = band[0]
+    fit = sum(1 for g in gaps if band[1] <= g <= band[2]) / len(gaps)
+    if len(ds) < (2 if freq in ("halfyear", "yearly") else 3) or fit < 0.7:
+        return None
+    amounts = [sum(t["amount"] for t in byday[d]) for d in days]
+    if freq in ("halfyear", "yearly") and ((max(amounts[-6:]) - min(amounts[-6:])) / abs(statistics.median(amounts[-3:])) > 0.25 or abs(amounts[-1]) < 2000):
+        return None      # rzadkie i bardzo różne kwoty – to raczej przypadek
+    if freq in ("weekly", "biweekly") and (max(amounts[-6:]) - min(amounts[-6:])) / abs(statistics.median(amounts[-3:])) > 0.6:
+        return None      # cotygodniowe zakupy w sklepie to nie stała płatność
+    return freq, ds, amounts
+
+
+def _by_months(byday, days, ref):
+    """Co miesiąc mniej więcej tego samego dnia, nawet gdy przychodzi kilka przelewów naraz albo dodatkowe wypłaty
+    (np. pensja w dwóch częściach, do tego premia czy ZFŚS). Kwota to suma przelewów z okolic typowego dnia."""
+    dist = lambda a, b: min(abs(a - b), 31 - abs(a - b))
+    per = {}
+    for d in days:
+        per.setdefault(d[:7], []).append(d)
+    if len(per) < 3 or statistics.median(len(v) for v in per.values()) > 3:      # zakupy w tym samym sklepie kilka razy w miesiącu
+        return None
+    main = [max(v, key=lambda d: abs(sum(t["amount"] for t in byday[d]))) for v in per.values()]
+    dom = int(statistics.median(int(d[8:]) for d in main))
+    hits = {}
+    for m, v in per.items():
+        near = [d for d in v if dist(int(d[8:]), dom) <= 5]
+        if near:
+            hits[m] = (min(near), sum(t["amount"] for d in near for t in byday[d]))
+    months = sorted(hits)
+    if len(months) < 3:
+        return None
+    y, mo = map(int, months[0].split("-"))
+    span = (ref.year - y) * 12 + ref.month - mo + (1 if ref.day >= dom - 5 else 0)
+    if len(months) < 0.8 * min(span, 18) or len(months) < 0.8 * span and span <= 6:
+        return None
+    amts = [hits[m][1] for m in months]
+    if (max(amts[-6:]) - min(amts[-6:])) / abs(statistics.median(amts[-6:])) > 0.6:
+        return None
+    return "monthly", [date.fromisoformat(hits[m][0]) for m in months], amts
+
+
 def detect(conn, today=None):
     """Płatności i wpływy, które powtarzają się regularnie u tego samego odbiorcy."""
     today = today or date.today()
@@ -98,25 +146,14 @@ def detect(conn, today=None):
         days = sorted(byday)
         if len(days) < 2:
             continue
-        ds = [date.fromisoformat(d) for d in days]
-        gaps = [(b - a).days for a, b in zip(ds, ds[1:])]
-        med = statistics.median(gaps)
-        band = next((b for b in BANDS if b[1] <= med <= b[2]), None)
-        if not band:
+        found = _by_gaps(byday, days) or _by_months(byday, days, ref)
+        if not found:
             continue
-        freq = band[0]
-        fit = sum(1 for g in gaps if band[1] <= g <= band[2]) / len(gaps)
-        need = 2 if freq in ("halfyear", "yearly") else 3
-        if len(ds) < need or fit < 0.7:
-            continue
-        amounts = [sum(t["amount"] for t in byday[d]) for d in days]
+        freq, ds, amounts = found
+        days = [d.isoformat() for d in ds]
         recent = amounts[-6:]
         typical = int(statistics.median(amounts[-3:]))
         spread = (max(recent) - min(recent)) / abs(typical) if typical else 1
-        if freq in ("halfyear", "yearly") and (spread > 0.25 or abs(amounts[-1]) < 2000):      # rzadkie i bardzo różne kwoty – to raczej przypadek
-            continue
-        if freq in ("weekly", "biweekly") and spread > 0.6:       # cotygodniowe zakupy w sklepie to nie stała płatność
-            continue
         period = FREQ[freq][1]
         if (ref - ds[-1]).days > period * 1.6 + 5:      # przestało się powtarzać
             continue
@@ -129,7 +166,7 @@ def detect(conn, today=None):
         nxt = step(ds[-1], freq)
         while nxt < ref - timedelta(days=3):
             nxt = step(nxt, freq)
-        cats = [t["category_id"] for d in days[-6:] for t in byday[d] if t["category_id"]]
+        cats = [t["category_id"] for d in days[-6:] for t in byday.get(d, []) if t["category_id"]]
         cp = (last_t["counterparty"] or "").strip()
         nice = " ".join(cp.split()[:3]) if cp and not core.is_processor(cp) and core.norm(cp).startswith(k.split()[0]) else k
         nice = nice.title() if nice.isupper() else nice
@@ -139,6 +176,53 @@ def detect(conn, today=None):
                         monthly=round(typical * 30.4 / period)))
     out.sort(key=lambda s: s["monthly"])      # największe wydatki (najbardziej ujemne) na górze, przychody na końcu
     return out
+
+
+def from_transactions(conn, ids, today=None):
+    """Propozycja pozycji planu z transakcji wskazanych przez użytkownika. Jedna transakcja – program szuka
+    jej poprzednich wystąpień u tego samego odbiorcy; kilka – liczy odstęp i kwotę właśnie z nich."""
+    today = today or date.today()
+    ph = ",".join("?" * len(ids))
+    sel = [dict(r) for r in conn.execute(f"SELECT t.id,t.date,t.amount,t.description,t.counterparty,t.category_id,a.person_id FROM transactions t "
+                                         f"JOIN accounts a ON a.id=t.account_id WHERE t.id IN ({ph}) ORDER BY t.date", ids)]
+    if not sel:
+        raise ValueError("Nie ma takich transakcji.")
+    keys = [core.merchant(t["description"], t["counterparty"]) for t in sel]
+    key = max(set(keys), key=keys.count)
+    pos = sum(1 for t in sel if t["amount"] > 0) * 2 > len(sel)
+    rows = [t for t in sel if (t["amount"] > 0) == pos]
+    if len(rows) == 1 and len(key) >= 3:      # dobierz wcześniejsze wystąpienia u tego odbiorcy
+        rows = [t for t in _budget_txs(conn, (today - timedelta(days=550)).isoformat())
+                if (t["amount"] > 0) == pos and core.merchant(t["description"], t["counterparty"]) == key] or rows
+    byday = {}
+    for t in rows:
+        byday.setdefault(t["date"], []).append(t)
+    days = sorted(byday)
+    found = (_by_gaps(byday, days) or _by_months(byday, days, today)) if len(days) >= 2 else None
+    guessed = False
+    if found:
+        freq, ds, amounts = found
+    else:
+        ds = [date.fromisoformat(d) for d in days]
+        amounts = [sum(t["amount"] for t in byday[d]) for d in days]
+        if len(ds) >= 2:      # najbliższy typowy odstęp
+            med = statistics.median((b - a).days for a, b in zip(ds, ds[1:]))
+            freq = min((k for k in FREQ if k != "once"), key=lambda k: abs(FREQ[k][1] - med))
+        else:
+            freq = "monthly"
+        guessed = True
+    nxt = step(ds[-1], freq)
+    while nxt < today - timedelta(days=3):
+        nxt = step(nxt, freq)
+    typical = int(statistics.median(amounts[-3:]))
+    spread = (max(amounts[-6:]) - min(amounts[-6:])) / abs(typical) if typical else 0
+    last = byday[days[-1]][-1]
+    cats = [t["category_id"] for t in rows if t["category_id"]]
+    cp = (last["counterparty"] or "").strip()
+    nice = " ".join(cp.split()[:3]) if cp and not core.is_processor(cp) else (key or (last["description"] or "")[:30])
+    nice = nice.title() if nice.isupper() else nice
+    return dict(name=nice[:40], phrase=key if len(key) >= 3 else "", amount=typical, variable=spread > 0.1, freq=freq, guessed=guessed,
+                count=len(ds), start=nxt.isoformat(), category_id=max(set(cats), key=cats.count) if cats else None, person_id=last["person_id"])
 
 
 def report(conn, months=6, person=None, today=None):
