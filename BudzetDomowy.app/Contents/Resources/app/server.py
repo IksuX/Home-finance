@@ -34,35 +34,57 @@ def receipt_json(conn, rid):
     return d
 
 
+EMPTY = dict(kind="paragon", store="", date=None, total=0, payment=None, saved=0, items=[])
+
+
+def read_receipt(conn, rid, frags=None):
+    """Odczytuje dokument (OCR, jeśli nie podano gotowych fragmentów) i zapisuje jego pozycje od nowa."""
+    r = conn.execute("SELECT * FROM receipts WHERE id=?", (rid,)).fetchone()
+    engine = r["engine"]
+    if frags is None:
+        frags, engine = rc.ocr(os.path.join(core.RECEIPT_DIR, r["file"]), os.path.join(core.RECEIPT_DIR, r["preview"]))
+    text_rows = rc.to_rows(frags) if frags else []
+    p = rc.parse_receipt(text_rows) if text_rows else EMPTY
+    conn.execute("UPDATE receipts SET kind=?,date=?,store=?,total=?,payment=?,saved=?,ocr_text=?,ocr_json=?,engine=?,checked=0 WHERE id=?",
+                 (p["kind"], p["date"], p["store"], p["total"], p["payment"], p["saved"], "\n".join(text_rows),
+                  json.dumps(frags) if frags else None, engine, rid))
+    conn.execute("DELETE FROM receipt_items WHERE receipt_id=?", (rid,))
+    for i, it in enumerate(p["items"]):
+        conn.execute("INSERT INTO receipt_items(receipt_id,name,qty,unit_price,amount,discount,category_id,pos) VALUES(?,?,?,?,?,?,?,?)",
+                     (rid, it["name"], it["qty"], it["unit_price"], it["amount"], it["discount"], rc.item_category(conn, it["name"], p["store"]), i))
+    conn.commit()
+
+
 def add_receipt(conn, raw, filename, person):
     ext = os.path.splitext(filename)[1].lower() or ".jpg"
     if ext not in (".jpg", ".jpeg", ".png", ".pdf", ".heic", ".tif", ".tiff", ".webp"):
-        raise ApiError("Paragon musi być zdjęciem (JPG, PNG, HEIC) albo plikiem PDF.")
-    rid = conn.execute("INSERT INTO receipts(created,person_id) VALUES(?,?)", (datetime.now().isoformat(timespec="seconds"), person)).lastrowid
+        raise ApiError("Paragon lub faktura musi być zdjęciem (JPG, PNG, HEIC) albo plikiem PDF.")
+    import hashlib
+    digest = hashlib.sha1(raw).hexdigest()
+    dup = conn.execute("SELECT id FROM receipts WHERE file_hash=?", (digest,)).fetchone()
+    if dup:                                   # ten sam plik już był wczytany
+        return dict(receipt_json(conn, dup["id"]), duplicate=True)
+    rid = conn.execute("INSERT INTO receipts(created,person_id,file_hash) VALUES(?,?,?)", (datetime.now().isoformat(timespec="seconds"), person, digest)).lastrowid
     path = os.path.join(core.RECEIPT_DIR, f"{rid}{ext}")
     with open(path, "wb") as f:
         f.write(raw)
     preview = os.path.join(core.RECEIPT_DIR, f"{rid}-podglad.jpg")
     if not rc.make_preview(path, preview):
         preview = path
-    frags, engine = rc.ocr(path, preview)
-    text_rows = rc.to_rows(frags) if frags else []
-    p = rc.parse_receipt(text_rows) if text_rows else dict(store="", date=None, total=0, payment=None, items=[])
-    conn.execute("UPDATE receipts SET date=?,store=?,total=?,payment=?,file=?,preview=?,ocr_text=?,engine=? WHERE id=?",
-                 (p["date"], p["store"], p["total"], p["payment"], os.path.basename(path), os.path.basename(preview),
-                  "\n".join(text_rows), engine, rid))
-    for i, it in enumerate(p["items"]):
-        conn.execute("INSERT INTO receipt_items(receipt_id,name,qty,unit_price,amount,category_id,pos) VALUES(?,?,?,?,?,?,?)",
-                     (rid, it["name"], it["qty"], it["unit_price"], it["amount"], rc.item_category(conn, it["name"], p["store"]), i))
+    conn.execute("UPDATE receipts SET file=?,preview=? WHERE id=?", (os.path.basename(path), os.path.basename(preview), rid))
     conn.commit()
+    read_receipt(conn, rid)
     rc.match_transactions(conn)
     return receipt_json(conn, rid)
 
 
 def update_receipt(conn, rid, b):
-    for k in ("date", "store", "total", "payment", "person_id", "checked"):
+    for k in ("date", "store", "payment", "person_id", "checked", "kind"):
         if k in b:
-            conn.execute(f"UPDATE receipts SET {k}=? WHERE id=?", (b[k] or None if k != "total" else int(b[k] or 0), rid))
+            conn.execute(f"UPDATE receipts SET {k}=? WHERE id=?", (b[k] or None, rid))
+    for k in ("total", "saved"):
+        if k in b:
+            conn.execute(f"UPDATE receipts SET {k}=? WHERE id=?", (int(b[k] or 0), rid))
     if "transaction_id" in b:
         conn.execute("UPDATE receipts SET transaction_id=? WHERE id=?", (b["transaction_id"] or None, rid))
     if "items" in b:
@@ -78,8 +100,9 @@ def update_receipt(conn, rid, b):
             if prev is not None and it.get("category_id") and prev["category_id"] != cid:
                 # użytkownik zmienił kategorię pozycji – zapamiętujemy ją dla tej nazwy
                 conn.execute("INSERT OR REPLACE INTO item_rules(name,category_id) VALUES(?,?)", (core.norm(name), cid))
-            conn.execute("INSERT INTO receipt_items(receipt_id,name,qty,unit_price,amount,category_id,pos) VALUES(?,?,?,?,?,?,?)",
-                         (rid, name, float(it.get("qty") or 1), int(it.get("unit_price") or 0), int(it.get("amount") or 0), cid, i))
+            conn.execute("INSERT INTO receipt_items(receipt_id,name,qty,unit_price,amount,discount,category_id,pos) VALUES(?,?,?,?,?,?,?,?)",
+                         (rid, name, float(it.get("qty") or 1), int(it.get("unit_price") or 0), int(it.get("amount") or 0),
+                          int(it.get("discount") or 0), cid, i))
     conn.commit()
     if b.get("rematch"):
         rc.match_transactions(conn)
@@ -88,7 +111,7 @@ def update_receipt(conn, rid, b):
 
 def tx_query(q):
     sql = ("FROM transactions t JOIN accounts a ON a.id=t.account_id LEFT JOIN categories c ON c.id=t.category_id "
-           "LEFT JOIN receipts r ON r.transaction_id=t.id WHERE 1=1")
+           "LEFT JOIN receipts r ON r.transaction_id=t.id LEFT JOIN transactions pt ON pt.id=t.pair_id LEFT JOIN accounts pa ON pa.id=pt.account_id WHERE 1=1")
     args = []
     if q.get("from"): sql += " AND t.date>=?"; args.append(q["from"])
     if q.get("to"): sql += " AND t.date<=?"; args.append(q["to"])
@@ -96,17 +119,55 @@ def tx_query(q):
     if q.get("account"): sql += " AND a.id=?"; args.append(int(q["account"]))
     if q.get("category") == "none": sql += " AND t.category_id IS NULL"
     elif q.get("category"): sql += " AND t.category_id=?"; args.append(int(q["category"]))
+    if q.get("sign") == "neg": sql += " AND t.amount<0"
+    if q.get("sign") == "pos": sql += " AND t.amount>0"
     if q.get("q"):
         for w in q["q"].split():
-            sql += " AND (t.description LIKE ? OR t.counterparty LIKE ? OR t.note LIKE ?)"
-            args += [f"%{w}%"] * 3
+            amt = core.parse_amount(w) if re.fullmatch(r"\d+([.,]\d{1,2})?", w) else None      # liczba = szukaj też po kwocie
+            sql += " AND (t.description LIKE ? OR t.counterparty LIKE ? OR t.note LIKE ?" + (" OR ABS(t.amount)=?" if amt else "") + ")"
+            args += [f"%{w}%"] * 3 + ([amt] if amt else [])
     return sql, args
+
+
+def product_key(name):
+    t = re.sub(r"[^A-Z0-9,.% ]", " ", core.norm(name)).split()
+    while len(t) > 1 and len(t[-1]) == 1:      # pojedyncze znaki na końcu to zwykle śmieci z odczytu albo litera VAT
+        t.pop()
+    return " ".join(t)
+
+
+def product_rows(conn, person=None):
+    """Wszystkie pozycje z dokumentów z ceną jednostkową; nazwy różniące się literówką z odczytu trafiają do jednego produktu."""
+    import difflib
+    # tylko dokumenty, w których pozycje zgadzają się z sumą (albo zatwierdzone ręcznie) – błąd odczytu nie udaje wtedy zmiany ceny
+    sql = ("SELECT i.name,i.qty,i.amount,i.discount,i.unit_price,r.date,r.store,r.id receipt_id,c.name category FROM receipt_items i "
+           "JOIN receipts r ON r.id=i.receipt_id LEFT JOIN categories c ON c.id=i.category_id WHERE r.date IS NOT NULL AND i.qty>0 AND i.amount>0 "
+           "AND IFNULL(c.name,'')!='Kaucja za opakowania' "
+           "AND (r.checked=1 OR r.total=(SELECT SUM(amount) FROM receipt_items x WHERE x.receipt_id=r.id))")
+    data = rows(conn.execute(sql + (" AND r.person_id=?" if person else "") + " ORDER BY r.date,r.id,i.pos", [person] if person else []))
+    counts = {}
+    for d in data:
+        d["key"] = product_key(d["name"])
+        counts[d["key"]] = counts.get(d["key"], 0) + 1
+    canon, mapping = [], {}
+    for key in sorted(counts, key=lambda k: (-counts[k], k)):
+        digits = re.findall(r"\d+", key)
+        hit = next((c for c in canon if re.findall(r"\d+", c) == digits and difflib.SequenceMatcher(None, c, key).ratio() >= 0.88), None)
+        mapping[key] = hit or key
+        if not hit:
+            canon.append(key)
+    for d in data:
+        d["key"] = mapping[d["key"]]
+        gross = d["amount"] + (d["discount"] or 0)
+        d["price"] = d["unit_price"] if d["unit_price"] and abs(round(d["qty"] * d["unit_price"]) - gross) <= 1 else round(gross / d["qty"])      # cena regularna za sztukę / kg
+        d["paid"] = round(d["amount"] / d["qty"])                                 # cena po rabacie
+    return data
 
 
 def api(method, path, q, body, raw, headers):
     conn = core.connect()
     try:
-        m = re.match(r"^/api/(\w+)(?:/(\d+))?(?:/(\w+))?$", path)
+        m = re.match(r"^/api/(\w+)(?:/(\d+))?(?:/(\w+))?$", path.replace("/receipts/rereadall", "/receipts/0/rereadall").replace("/settlements/preview", "/settlements/0/preview").replace("/rules/preview", "/rules/0/preview").replace("/categories/order", "/categories/0/order"))
         if not m:
             raise ApiError("Nieznany adres.")
         res, oid, sub = m.group(1), int(m.group(2)) if m.group(2) else None, m.group(3)
@@ -118,35 +179,92 @@ def api(method, path, q, body, raw, headers):
                         categories=rows(conn.execute("SELECT * FROM categories ORDER BY sort,id")),
                         rules=rows(conn.execute("SELECT r.*, c.name category FROM rules r JOIN categories c ON c.id=r.category_id WHERE r.user=1 ORDER BY r.id DESC")),
                         imports=rows(conn.execute("SELECT * FROM imports ORDER BY id DESC LIMIT 20")),
-                        first=b["a"], last=b["b"], tx_count=b["n"], ocr=rc.engine_status(), data_dir=core.DATA_DIR)
+                        first=b["a"], last=b["b"], tx_count=b["n"], ocr=rc.engine_status(), data_dir=core.DATA_DIR, kinds=core.KINDS, atm_feeds_cash=core.atm_feeds_cash(conn))
 
         if res == "summary":
             return core.summary(conn, q.get("from"), q.get("to"), int(q["person"]) if q.get("person") else None)
 
-        if res == "transactions" and method == "GET":
+        if res == "transactions" and method == "GET" and not oid:
             sql, args = tx_query(q)
             total = conn.execute("SELECT COUNT(*) n, IFNULL(SUM(t.amount),0) s " + sql, args).fetchone()
             lim, off = int(q.get("limit", 200)), int(q.get("offset", 0))
             data = rows(conn.execute("SELECT t.id,t.date,t.amount,t.currency,t.description,t.counterparty,t.category_id,t.cat_source,t.note,"
-                                     "a.person_id,a.bank,a.label account,r.id receipt_id " + sql + " ORDER BY t.date DESC,t.id DESC LIMIT ? OFFSET ?", args + [lim, off]))
+                                     "a.person_id,a.bank,a.label account,a.kind account_kind,a.id account_id,t.manual,r.id receipt_id,t.pair_id,pt.date pair_date,pt.amount pair_amount,"
+                                     "pa.bank pair_bank,pa.label pair_account " + sql + " ORDER BY t.date DESC,t.id DESC LIMIT ? OFFSET ?", args + [lim, off]))
             for d in data:
                 d["merchant"] = core.merchant(d["description"], d["counterparty"])
+                d["processor"] = core.is_processor(d["counterparty"])
+                d["phrases"] = core.rule_phrases(d["description"], d["counterparty"])
             return dict(total=total["n"], sum=total["s"], rows=data)
 
+        if res == "transactions" and method == "POST" and not oid:      # wpis ręczny, którego nie ma w wyciągach
+            import uuid
+            d = core.parse_date(body.get("date"))
+            amt = int(body.get("amount") or 0)
+            if not d or not amt:
+                raise ApiError("Podaj datę i kwotę.")
+            acc = int(body["account_id"]) if body.get("account_id") else core.cash_wallet(conn, int(body["person_id"]))
+            conn.execute("INSERT INTO transactions(account_id,date,amount,currency,description,counterparty,category_id,cat_source,hash,note,manual) "
+                         "VALUES(?,?,?,'PLN',?,'',?,'manual',?,?,1)", (acc, d, amt, (body.get("description") or "").strip() or ("Przychód" if amt > 0 else "Wydatek"),
+                                                                   body.get("category_id") or None, "manual-" + uuid.uuid4().hex, (body.get("note") or "").strip() or None))
+            conn.commit()
+            return {"ok": True}
+        if res == "transactions" and method == "DELETE":
+            if not conn.execute("SELECT 1 FROM transactions WHERE id=? AND manual=1", (oid,)).fetchone():
+                raise ApiError("Usunąć można tylko wpisy dodane ręcznie. Transakcje z wyciągu cofniesz w zakładce Wczytaj wyciąg.")
+            conn.execute("UPDATE receipts SET transaction_id=NULL WHERE transaction_id=?", (oid,))
+            conn.execute("DELETE FROM transactions WHERE id=?", (oid,))
+            conn.commit()
+            return {"ok": True}
+        if res == "networth":
+            return core.networth(conn, int(q["person"]) if q.get("person") else None)
+        if res == "transactions" and method == "GET" and oid and sub == "pairs":
+            t = conn.execute("SELECT * FROM transactions WHERE id=?", (oid,)).fetchone()
+            return rows(conn.execute("SELECT t.id,t.date,t.amount,t.description,t.counterparty,a.bank,a.label account,a.kind account_kind,a.person_id FROM transactions t "
+                                     "JOIN accounts a ON a.id=t.account_id WHERE t.account_id!=? AND (t.amount>0)!=(?>0) AND t.pair_id IS NULL "
+                                     "AND t.date BETWEEN date(?,'-7 day') AND date(?,'+7 day') ORDER BY ABS(ABS(t.amount)-?), ABS(julianday(t.date)-julianday(?)) LIMIT 10",
+                                     (t["account_id"], t["amount"], t["date"], t["date"], abs(t["amount"]), t["date"])))
+        if res == "transactions" and method == "POST" and oid and sub == "link":
+            try:
+                core.link_pair(conn, oid, int(body["other"]))
+            except ValueError as e:
+                raise ApiError(str(e))
+            return {"ok": True}
+        if res == "transactions" and method == "POST" and oid and sub == "unlink":
+            core.unlink_pair(conn, oid)
+            return {"ok": True}
         if res == "transactions" and method == "POST" and oid:
             if "category_id" in body:
+                if body["category_id"]:
+                    t = conn.execute("SELECT amount FROM transactions WHERE id=?", (oid,)).fetchone()
+                    k = conn.execute("SELECT kind,name FROM categories WHERE id=?", (body["category_id"],)).fetchone()
+                    if t and k and not core.sign_ok(k["kind"], t["amount"]):
+                        raise ApiError(f"„{k['name']}” to kategoria {'wydatków' if k['kind'] == 'expense' else 'przychodów'}, a to jest {'wpływ' if t['amount'] > 0 else 'wydatek'}.")
                 conn.execute("UPDATE transactions SET category_id=?, cat_source='manual' WHERE id=?", (body["category_id"] or None, oid))
             if "note" in body:
-                conn.execute("UPDATE transactions SET note=? WHERE id=?", (body["note"], oid))
+                conn.execute("UPDATE transactions SET note=? WHERE id=?", ((body["note"] or "").strip() or None, oid))
             conn.commit()
             return {"ok": True}
 
+        if res == "rules" and method == "POST" and sub == "preview":
+            rx = core.rule_regex(body.get("pattern") or "")
+            if not rx or len(core.norm(body.get("pattern"))) < 3:
+                return dict(count=0, rows=[], processor=False)
+            k = conn.execute("SELECT kind FROM categories WHERE id=?", (body.get("category_id") or 0,)).fetchone()
+            kind = k["kind"] if k else None
+            hits = [dict(r) for r in conn.execute("SELECT t.id,t.date,t.amount,t.description,t.counterparty,t.category_id,t.cat_source,c.name category FROM transactions t "
+                                                  "LEFT JOIN categories c ON c.id=t.category_id ORDER BY t.date DESC")
+                    if rx.search(core.norm(f"{r['counterparty'] or ''} {r['description'] or ''}")) and core.sign_ok(kind, r["amount"])]
+            return dict(count=len(hits), manual=sum(1 for h in hits if h["cat_source"] == "manual"), rows=hits[:8],
+                        processor=core.is_processor(body.get("pattern")))
         if res == "rules" and method == "POST":
             pat = core.norm(body.get("pattern"))
             if len(pat) < 3:
                 raise ApiError("Fraza reguły musi mieć co najmniej 3 znaki.")
+            k = conn.execute("SELECT kind FROM categories WHERE id=?", (int(body["category_id"]),)).fetchone()
+            sign = {"expense": -1, "income": 1}.get(k["kind"] if k else None, 0)      # reguła działa tylko na pasującą stronę
             conn.execute("DELETE FROM rules WHERE user=1 AND pattern=?", (pat,))
-            conn.execute("INSERT INTO rules(pattern,category_id,sign,user) VALUES(?,?,0,1)", (pat, int(body["category_id"])))
+            conn.execute("INSERT INTO rules(pattern,category_id,sign,user) VALUES(?,?,?,1)", (pat, int(body["category_id"]), sign))
             conn.commit()
             return {"changed": core.recategorize(conn)}
         if res == "rules" and method == "DELETE":
@@ -160,17 +278,71 @@ def api(method, path, q, body, raw, headers):
                 raise ApiError("Podaj imię.")
             if oid:
                 conn.execute("UPDATE people SET name=? WHERE id=?", (name, oid))
+                if "fullname" in body:
+                    conn.execute("UPDATE people SET fullname=? WHERE id=?", ((body["fullname"] or "").strip() or None, oid))
             else:
-                conn.execute("INSERT INTO people(name) VALUES(?)", (name,))
+                conn.execute("INSERT INTO people(name,fullname) VALUES(?,?)", (name, (body.get("fullname") or "").strip() or None))
             conn.commit()
+            if "fullname" in body:
+                core.refresh_settlement_categories(conn)
             return {"ok": True}
 
+        if res == "accounts" and method == "GET":
+            b = conn.execute("SELECT MIN(date) a, MAX(date) b FROM transactions").fetchone()
+            today = datetime.now().date().isoformat()
+            return core.accounts_overview(conn, q.get("from") or b["a"] or today, q.get("to") or today)
+        if res == "accounts" and method == "POST" and oid and sub == "balance":
+            d = core.parse_date(body.get("date")) or datetime.now().date().isoformat()
+            conn.execute("DELETE FROM balances WHERE account_id=? AND date=?", (oid, d))
+            conn.execute("INSERT INTO balances(account_id,date,amount) VALUES(?,?,?)", (oid, d, int(body.get("amount") or 0)))
+            conn.commit()
+            return {"ok": True}
         if res == "accounts" and method == "POST" and oid:
-            conn.execute("UPDATE accounts SET person_id=? WHERE id=?", (int(body["person_id"]), oid))
+            for k in ("person_id", "kind", "name"):
+                if k in body:
+                    if k == "kind" and body[k] not in core.KINDS:
+                        raise ApiError("Nieznany rodzaj konta.")
+                    conn.execute(f"UPDATE accounts SET {k}=? WHERE id=?", (body[k] or None, oid))
             conn.commit()
-            core.detect_internal(conn)
+            core.reclassify_transfers(conn)
+            return {"ok": True}
+        if res == "accounts" and method == "POST":
+            name = (body.get("name") or "").strip()
+            if not name:
+                raise ApiError("Podaj nazwę konta.")
+            kind = body.get("kind") if body.get("kind") in core.KINDS else "savings"
+            if kind == "cash":
+                aid = core.cash_wallet(conn, int(body["person_id"]))
+                if body.get("amount") not in (None, ""):
+                    conn.execute("INSERT INTO balances(account_id,date,amount) VALUES(?,?,?)", (aid, datetime.now().date().isoformat(), int(body["amount"])))
+                conn.commit()
+                return {"id": aid}
+            try:
+                aid = conn.execute("INSERT INTO accounts(bank,label,person_id,kind) VALUES(?,?,?,?)", (core.MANUAL, name, int(body["person_id"]), kind)).lastrowid
+            except Exception:
+                raise ApiError("Konto o tej nazwie już istnieje.")
+            if body.get("amount") not in (None, ""):
+                conn.execute("INSERT INTO balances(account_id,date,amount) VALUES(?,?,?)", (aid, datetime.now().date().isoformat(), int(body["amount"])))
+            conn.commit()
+            return {"id": aid}
+        if res == "accounts" and method == "DELETE":
+            if conn.execute("SELECT 1 FROM transactions WHERE account_id=? AND IFNULL(manual,0)=0 LIMIT 1", (oid,)).fetchone():
+                raise ApiError("To konto ma transakcje z wyciągów. Żeby je usunąć, cofnij wczytanie plików w zakładce Wczytaj wyciąg.")
+            conn.execute("DELETE FROM balances WHERE account_id=?", (oid,))
+            conn.execute("DELETE FROM transactions WHERE account_id=?", (oid,))
+            conn.execute("DELETE FROM accounts WHERE id=?", (oid,))
+            conn.commit()
+            return {"ok": True}
+        if res == "balances" and method == "DELETE":
+            conn.execute("DELETE FROM balances WHERE id=?", (oid,))
+            conn.commit()
             return {"ok": True}
 
+        if res == "categories" and method == "POST" and sub == "order":
+            for i, cid in enumerate(body.get("ids") or []):
+                conn.execute("UPDATE categories SET sort=? WHERE id=?", (i, int(cid)))
+            conn.commit()
+            return {"ok": True}
         if res == "categories" and method == "POST":
             if oid:
                 for k in ("name", "kind", "budget"):
@@ -210,22 +382,41 @@ def api(method, path, q, body, raw, headers):
         if res == "imports" and method == "DELETE":
             conn.execute("UPDATE receipts SET transaction_id=NULL WHERE transaction_id IN (SELECT id FROM transactions WHERE import_id=?)", (oid,))
             conn.execute("DELETE FROM transactions WHERE import_id=?", (oid,))
+            conn.execute("DELETE FROM settlement_items WHERE transaction_id NOT IN (SELECT id FROM transactions)")
             conn.execute("DELETE FROM imports WHERE id=?", (oid,))
-            conn.execute("DELETE FROM accounts WHERE id NOT IN (SELECT DISTINCT account_id FROM transactions)")
+            conn.execute("DELETE FROM accounts WHERE bank!=? AND id NOT IN (SELECT DISTINCT account_id FROM transactions)", (core.MANUAL,))
+            conn.execute("DELETE FROM balances WHERE account_id NOT IN (SELECT id FROM accounts)")
             conn.commit()
             return {"ok": True}
 
         if res == "receipts":
             if method == "GET" and not oid:
-                return rows(conn.execute("SELECT r.id,r.date,r.store,r.total,r.payment,r.person_id,r.transaction_id,r.checked,r.engine,"
+                return rows(conn.execute("SELECT r.id,r.kind,r.date,r.store,r.total,r.payment,r.person_id,r.transaction_id,r.checked,r.engine,"
+                                         "r.saved+(SELECT IFNULL(SUM(discount),0) FROM receipt_items i WHERE i.receipt_id=r.id) saved,"
                                          "(SELECT COUNT(*) FROM receipt_items i WHERE i.receipt_id=r.id) n,"
                                          "(SELECT IFNULL(SUM(amount),0) FROM receipt_items i WHERE i.receipt_id=r.id) items_sum "
                                          "FROM receipts r ORDER BY IFNULL(r.date,r.created) DESC, r.id DESC"))
             if method == "GET" and sub == "candidates":
                 r = conn.execute("SELECT * FROM receipts WHERE id=?", (oid,)).fetchone()
-                return rows(conn.execute("SELECT t.id,t.date,t.amount,t.description,t.counterparty FROM transactions t WHERE t.amount<0 "
-                                         "AND t.date BETWEEN date(?,'-3 day') AND date(?,'+7 day') ORDER BY ABS(t.amount+?) LIMIT 12",
-                                         (r["date"] or "1900-01-01", r["date"] or "1900-01-01", r["total"] or 0)))
+                d = r["date"] or r["created"][:10]
+                return rows(conn.execute("SELECT t.id,t.date,t.amount,t.description,t.counterparty,a.person_id FROM transactions t JOIN accounts a ON a.id=t.account_id "
+                                         "WHERE t.amount<0 AND t.date BETWEEN date(?,'-5 day') AND date(?,?) "
+                                         "AND t.id NOT IN (SELECT transaction_id FROM receipts WHERE transaction_id IS NOT NULL) "
+                                         "ORDER BY ABS(t.amount+?), ABS(julianday(t.date)-julianday(?)) LIMIT 8",
+                                         (d, d, "+40 day" if r["kind"] == "faktura" else "+10 day", r["total"] or 0, d)))
+            if method == "POST" and sub == "reread":
+                with LOCK:
+                    conn.execute("UPDATE receipts SET transaction_id=NULL WHERE id=?", (oid,))
+                    read_receipt(conn, oid)
+                    rc.match_transactions(conn)
+                return receipt_json(conn, oid)
+            if method == "POST" and sub == "rereadall":
+                ids = [r["id"] for r in conn.execute("SELECT id FROM receipts WHERE checked=0")]
+                with LOCK:
+                    for i in ids:
+                        conn.execute("UPDATE receipts SET transaction_id=NULL WHERE id=?", (i,))
+                        read_receipt(conn, i)
+                    return {"count": len(ids), "matched": rc.match_transactions(conn)}
             if method == "GET":
                 return receipt_json(conn, oid)
             if method == "POST" and not oid:
@@ -244,17 +435,91 @@ def api(method, path, q, body, raw, headers):
                 return {"ok": True}
 
         if res == "items":
-            sql = ("FROM receipt_items i JOIN receipts r ON r.id=i.receipt_id LEFT JOIN categories c ON c.id=i.category_id WHERE 1=1")
-            args = []
-            if q.get("from"): sql += " AND r.date>=?"; args.append(q["from"])
-            if q.get("to"): sql += " AND r.date<=?"; args.append(q["to"])
-            if q.get("person"): sql += " AND r.person_id=?"; args.append(int(q["person"]))
+            where, args = " WHERE 1=1", []
+            if q.get("from"): where += " AND r.date>=?"; args.append(q["from"])
+            if q.get("to"): where += " AND r.date<=?"; args.append(q["to"])
+            if q.get("person"): where += " AND r.person_id=?"; args.append(int(q["person"]))
+            sql = "FROM receipt_items i JOIN receipts r ON r.id=i.receipt_id LEFT JOIN categories c ON c.id=i.category_id" + where
+            tot = conn.execute("SELECT COUNT(*) n, IFNULL(SUM(r.saved),0) extra, IFNULL(SUM(r.total),0) paid, "
+                               "IFNULL(SUM((SELECT SUM(discount) FROM receipt_items i WHERE i.receipt_id=r.id)),0) disc, "
+                               "SUM(CASE WHEN r.saved+(SELECT IFNULL(SUM(discount),0) FROM receipt_items i WHERE i.receipt_id=r.id)>0 THEN 1 ELSE 0 END) with_disc "
+                               "FROM receipts r" + where, args).fetchone()
             return dict(products=rows(conn.execute("SELECT MIN(i.name) name, SUM(i.amount) amount, SUM(i.qty) qty, COUNT(*) n, MAX(c.name) category "
                                                    + sql + " GROUP BY UPPER(i.name) ORDER BY amount DESC LIMIT 40", args)),
                         categories=rows(conn.execute("SELECT IFNULL(c.name,'Bez kategorii') name, SUM(i.amount) amount, COUNT(*) n "
                                                      + sql + " GROUP BY c.name ORDER BY amount DESC", args)),
-                        stores=rows(conn.execute("SELECT r.store name, COUNT(DISTINCT r.id) n, SUM(i.amount) amount " + sql +
-                                                 " GROUP BY r.store ORDER BY amount DESC LIMIT 10", args)))
+                        savings=dict(total=tot["extra"] + tot["disc"], paid=tot["paid"], receipts=tot["n"], with_discount=tot["with_disc"] or 0,
+                                     stores=rows(conn.execute("SELECT r.store name, COUNT(*) n, SUM(r.total) paid, SUM(r.saved+(SELECT IFNULL(SUM(discount),0) "
+                                                              "FROM receipt_items i WHERE i.receipt_id=r.id)) saved_sum FROM receipts r" + where +
+                                                              " GROUP BY r.store HAVING saved_sum>0 ORDER BY saved_sum DESC LIMIT 8", args)),
+                                     products=rows(conn.execute("SELECT MIN(i.name) name, SUM(i.discount) saved, SUM(i.amount) paid, COUNT(*) n " + sql +
+                                                                " AND i.discount>0 GROUP BY UPPER(i.name) ORDER BY saved DESC LIMIT 10", args))))
+
+        if res in ("products", "product"):
+            data = product_rows(conn, int(q["person"]) if q.get("person") else None)
+            if res == "product":
+                return [d for d in data if d["key"] == q.get("name")]
+            data = [d for d in data if (not q.get("from") or d["date"] >= q["from"]) and (not q.get("to") or d["date"] <= q["to"])]
+            groups = {}
+            for d in data:
+                groups.setdefault(d["key"], []).append(d)
+            out, up, down, base, now = [], 0, 0, 0, 0
+            for key, g in groups.items():
+                names = [d["name"] for d in g]
+                qty, paid = sum(d["qty"] for d in g), sum(d["amount"] for d in g)
+                first, last = g[0], g[-1]
+                comparable = first["date"] != last["date"]
+                change = last["price"] - first["price"] if comparable else None
+                if comparable:
+                    w = qty / len(g)
+                    base += first["price"] * w; now += last["price"] * w
+                    up += change > 0; down += change < 0
+                out.append(dict(key=key, name=max(set(names), key=names.count), category=g[-1]["category"], n=len(g), qty=round(qty, 3), paid=paid,
+                                saved=sum(d["discount"] or 0 for d in g), avg_paid=round(paid / qty), first=first["price"], last=last["price"],
+                                first_date=first["date"], last_date=last["date"], change=change,
+                                pct=(round(change / first["price"] * 100, 1) if comparable and first["price"] else None),
+                                min=min(d["price"] for d in g), max=max(d["price"] for d in g), stores=sorted({d["store"] or "" for d in g})))
+            out.sort(key=lambda p: -p["paid"])
+            skipped = conn.execute("SELECT COUNT(*) FROM receipts r WHERE r.checked=0 AND r.total!=(SELECT IFNULL(SUM(amount),0) FROM receipt_items x WHERE x.receipt_id=r.id)"
+                                   + (" AND r.date>=?" if q.get("from") else "") + (" AND r.date<=?" if q.get("to") else ""),
+                                   [x for x in (q.get("from"), q.get("to")) if x]).fetchone()[0]
+            return dict(skipped=skipped, products=out, up=up, down=down, same=sum(1 for p in out if p["change"] == 0),
+                        basket=(round((now / base - 1) * 100, 1) if base else None), compared=up + down + sum(1 for p in out if p["change"] == 0))
+
+        if res == "settlements":
+            if method == "GET":
+                return dict(groups=core.settlements_report(conn, q.get("from"), q.get("to"), int(q["person"]) if q.get("person") else None),
+                            suggestions=core.settlement_suggestions(conn))
+            if method == "POST" and sub == "preview":
+                m = core.settlement_members(conn, body.get("patterns") or "")
+                return dict(count=len(m), balance=sum(t["amount"] for t in m), rows=m[-10:][::-1])
+            if method == "POST":
+                name, pats = (body.get("name") or "").strip(), "\n".join(p.strip() for p in re.split(r"[\n;]+", body.get("patterns") or "") if len(core.norm(p)) >= 3)
+                manual = body.get("mode") == "manual"
+                items = [int(i) for i in body.get("items") or []]
+                if not name:
+                    raise ApiError("Podaj nazwę rozliczenia.")
+                if manual and not items:
+                    raise ApiError("Dodaj co najmniej jedną transakcję.")
+                if not manual and not pats:
+                    raise ApiError("Podaj co najmniej jedną frazę (minimum 3 znaki).")
+                args = (name, "" if manual else pats, body.get("category_id") or None, max(1, min(400, int(body.get("window") or 40))), "manual" if manual else "auto")
+                if oid:
+                    conn.execute("UPDATE settlements SET name=?,patterns=?,category_id=?,window=?,mode=? WHERE id=?", args + (oid,))
+                else:
+                    oid = conn.execute("INSERT INTO settlements(name,patterns,category_id,window,mode) VALUES(?,?,?,?,?)", args).lastrowid
+                conn.execute("DELETE FROM settlement_items WHERE settlement_id=?", (oid,))
+                for i in items if manual else []:
+                    conn.execute("INSERT OR IGNORE INTO settlement_items(settlement_id,transaction_id) VALUES(?,?)", (oid, i))
+                conn.commit()
+                core.refresh_settlement_categories(conn)
+                return {"ok": True}
+            if method == "DELETE":
+                conn.execute("DELETE FROM settlement_items WHERE settlement_id=?", (oid,))
+                conn.execute("DELETE FROM settlements WHERE id=?", (oid,))
+                conn.commit()
+                core.refresh_settlement_categories(conn)
+                return {"ok": True}
 
         if res == "quit" and method == "POST":
             threading.Thread(target=lambda: (time.sleep(0.3), os._exit(0)), daemon=True).start()

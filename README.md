@@ -1,7 +1,17 @@
-# Budżet domowy 0.1.0
+# Budżet domowy 0.9.4
 
-Aplikacja na Maca do analizy domowego budżetu na podstawie wyciągów bankowych (mBank, ING) i skanów paragonów.
-Gotowy instalator: `dist/BudzetDomowy-0.1.0.zip`. Kod źródłowy: `BudzetDomowy.app/Contents/Resources/app`.
+Aplikacja na Maca do analizy domowego budżetu na podstawie wyciągów bankowych (mBank, ING, MT940, Revolut) i skanów paragonów.
+Gotowy instalator: `dist/BudzetDomowy-0.9.4.zip`. Kod źródłowy: `BudzetDomowy.app/Contents/Resources/app`.
+
+## Zrzuty ekranu (dane przykładowe)
+
+![Przegląd](docs/screenshots/1-przeglad.png)
+![Paragon](docs/screenshots/5-paragon.png)
+![Produkty](docs/screenshots/6-produkty.png)
+![Transakcje](docs/screenshots/3-transakcje.png)
+![Konta](docs/screenshots/8-konta.png)
+![Rozliczenia](docs/screenshots/9-rozliczenia.png)
+![Tryb ciemny](docs/screenshots/2-przeglad-ciemny.png)
 
 Instalacja
 1. Przeciągnij "BudzetDomowy.app" do folderu Programy.
