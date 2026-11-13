@@ -1,5 +1,5 @@
 """Budżet domowy – start na Windows: uruchamia lokalny serwer (jeśli jeszcze nie działa) i otwiera przeglądarkę."""
-import os, sys, threading, time, urllib.request, webbrowser
+import json, os, sys, threading, time, urllib.request, webbrowser
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -23,9 +23,35 @@ def alert(msg):
         pass
 
 
-if up():
-    webbrowser.open(URL)
-    sys.exit(0)
+import re
+
+
+def own_version():
+    with open(os.path.join(HERE, "core.py"), encoding="utf-8") as f:
+        return re.search(r'^VERSION = "([^"]+)"', f.read(), re.M).group(1)
+
+
+def running_version():
+    try:
+        return json.loads(_direct.open(URL + "api/state", timeout=2).read()).get("version")
+    except Exception:
+        return None
+
+
+RESTART = os.environ.get("BUDZET_RESTART")      # nowa wersja uruchomiona przez poprzednią – przeglądarka sama się odświeży
+if not RESTART and up():
+    if running_version() == own_version():
+        webbrowser.open(URL)
+        sys.exit(0)
+    try:      # w tle działa inna wersja – zamykamy ją i startujemy tę
+        _direct.open(urllib.request.Request(URL + "api/quit", data=b"{}", method="POST",
+                                            headers={"Content-Type": "application/json", "Origin": URL.rstrip("/")}), timeout=3).close()
+    except Exception:
+        pass
+    for _ in range(40):
+        if not up():
+            break
+        time.sleep(0.25)
 
 import core
 os.makedirs(core.DATA_DIR, exist_ok=True)
@@ -36,7 +62,8 @@ sys.stdout = sys.stderr = log      # pythonw nie ma konsoli
 def opener():
     for _ in range(80):
         if up():
-            webbrowser.open(URL)
+            if not RESTART:
+                webbrowser.open(URL)
             return
         time.sleep(0.25)
     alert("Program nie odpowiada. Szczegóły są w pliku program.log w folderze " + core.DATA_DIR)

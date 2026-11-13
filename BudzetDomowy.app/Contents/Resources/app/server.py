@@ -177,6 +177,12 @@ def api(method, path, q, body, raw, headers):
             raise ApiError("Nieznany adres.")
         res, oid, sub = m.group(1), int(m.group(2)) if m.group(2) else None, m.group(3)
 
+        if res == "state" and disk_version() != core.VERSION:
+            restart()
+            return {"restarting": True, "version": core.VERSION, "new_version": disk_version()}
+        if res == "restart" and method == "POST":
+            restart()
+            return {"ok": True}
         if res == "state":
             b = conn.execute("SELECT MIN(date) a, MAX(date) b, COUNT(*) n FROM transactions").fetchone()
             return dict(version=core.VERSION, people=rows(conn.execute("SELECT * FROM people ORDER BY id")),
@@ -745,9 +751,44 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self): self.handle_any("DELETE")
 
 
+def disk_version():
+    """Wersja zapisana w plikach na dysku – po podmianie aplikacji różni się od tej, która działa."""
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "core.py"), encoding="utf-8") as f:
+            m = re.search(r'^VERSION = "([^"]+)"', f.read(), re.M)
+        return m.group(1) if m else core.VERSION
+    except OSError:
+        return core.VERSION
+
+
+_restarting = False
+
+
+def restart():
+    """Uruchamia nową wersję programu (z plików na dysku) i kończy bieżącą."""
+    global _restarting
+    if _restarting:
+        return
+    _restarting = True
+    import subprocess
+    entry = os.path.abspath(sys.argv[0])
+    extra = {"creationflags": 0x00000008 | 0x00000200} if os.name == "nt" else {"start_new_session": True}     # DETACHED_PROCESS | NEW_PROCESS_GROUP
+    log = open(os.path.join(core.DATA_DIR, "program.log"), "a")
+    subprocess.Popen([sys.executable, entry], cwd=os.path.dirname(entry), env=dict(os.environ, BUDZET_RESTART="1"),
+                     stdin=subprocess.DEVNULL, stdout=log, stderr=log, close_fds=True, **extra)
+    threading.Thread(target=lambda: (time.sleep(0.4), os._exit(0)), daemon=True).start()
+
+
 def main():
     c0 = core.init_db(); pl.ensure(c0); pm.ensure(c0); c0.close()
-    srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    for attempt in range(60):      # po aktualizacji poprzednia wersja może jeszcze przez chwilę trzymać port
+        try:
+            srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+            break
+        except OSError:
+            if not os.environ.get("BUDZET_RESTART") or attempt == 59:
+                raise
+            time.sleep(0.25)
     print(f"Budżet domowy {core.VERSION}: http://127.0.0.1:{PORT}", flush=True)
     srv.serve_forever()
 

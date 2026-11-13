@@ -10,6 +10,7 @@ const MSHORT = ['sty', 'lut', 'mar', 'kwi', 'maj', 'cze', 'lip', 'sie', 'wrz', '
 const PCOL = ['var(--p1)', 'var(--p2)', 'var(--p3)', 'var(--p4)'];
 
 let S = null;                                   // stan z serwera
+const APP_VERSION = '0.10.1';      // wersja plików strony – gdy program w tle jest inny, trzeba go uruchomić ponownie
 const F = { mode: 'month', anchor: null, person: null, from: null, to: null, cmp: 'year', cmpFrom: null, cmpTo: null };   // wybrany okres i osoba
 const TX = { q: '', category: '', account: '', limit: 200, sel: new Map() };
 const accName = x => x.name || (x.bank === 'Ręczne' ? x.label : `${x.bank} ${x.label}`);
@@ -96,6 +97,18 @@ function tip(ev, html) { const t = $('#tip'); if (!html) { t.hidden = true; retu
 // ---------- szkielet ----------
 async function load() {
   S = await api('state');
+  for (let i = 0; S.restarting && i < 40; i++) {      // program wykrył nowszą wersję plików i uruchamia się ponownie
+    document.body.innerHTML = `<div class="empty" style="margin:20vh auto;max-width:420px"><b>Uruchamiam nową wersję programu…</b>Za chwilę wszystko będzie gotowe.</div>`;
+    await new Promise(r => setTimeout(r, 750));
+    try { S = await api('state'); } catch (e) { S = { restarting: true }; }
+    if (!S.restarting) { location.reload(); await new Promise(() => { }); }
+  }
+  if (S.version && S.version !== APP_VERSION) {      // starsza wersja w tle, która nie umie się sama zrestartować
+    document.body.innerHTML = `<div class="empty" style="margin:20vh auto;max-width:520px"><b>W tle działa starsza wersja programu (${esc(S.version)})</b>
+      Okno jest już z wersji ${APP_VERSION}, więc część funkcji by nie działała. Zamknij starą wersję i otwórz program ponownie z ikony.
+      <div style="margin-top:16px"><button class="btn primary" onclick="api('quit',{method:'POST'}).finally(()=>{this.closest('.empty').innerHTML='<b>Stara wersja zamknięta</b>Otwórz teraz Budżet domowy z ikony programu.'})">Zamknij starą wersję</button></div></div>`;
+    await new Promise(() => { });
+  }
   if (!F.anchor) F.anchor = (S.last || new Date().toISOString()).slice(0, 7);
 }
 function go(v, extra) { view = v; receiptId = null; PR.open = null; if (extra) Object.assign(TX, extra); location.hash = v; render(); }

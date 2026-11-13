@@ -7,7 +7,14 @@ DATA="$HOME/Library/Application Support/BudzetDomowy"
 mkdir -p "$DATA"
 
 running() { /usr/bin/curl -s -o /dev/null --max-time 1 "${URL}api/state"; }
-if running; then /usr/bin/open "$URL"; exit 0; fi
+OWN=$(/usr/bin/sed -n 's/^VERSION = "\(.*\)"/\1/p' "$APP/core.py")
+if running; then
+  CUR=$(/usr/bin/curl -s --max-time 2 "${URL}api/state" | /usr/bin/grep -o '"version": *"[^"]*"' | /usr/bin/head -1 | /usr/bin/sed 's/.*"\([^"]*\)"$/\1/')
+  if [ "$CUR" = "$OWN" ]; then /usr/bin/open "$URL"; exit 0; fi
+  # w tle działa inna (starsza) wersja – zamykamy ją, żeby wystartowała ta z bieżącej aplikacji
+  /usr/bin/curl -s -o /dev/null --max-time 3 -X POST -H "Origin: http://127.0.0.1:$PORT" -H "Content-Type: application/json" -d '{}' "${URL}api/quit"
+  for i in $(seq 1 40); do running || break; sleep 0.25; done
+fi
 
 PY=""
 for c in /opt/homebrew/bin/python3 /usr/local/bin/python3 /Library/Frameworks/Python.framework/Versions/Current/bin/python3; do
