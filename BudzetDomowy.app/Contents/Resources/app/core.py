@@ -3,7 +3,7 @@ import csv, hashlib, io, os, re, sqlite3, unicodedata
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
-VERSION = "0.9.8"
+VERSION = "0.9.9"
 DATA_DIR = os.environ.get("BUDZET_DATA") or (os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "BudzetDomowy") if os.name == "nt"
                                              else os.path.expanduser("~/Library/Application Support/BudzetDomowy"))
 DB_PATH = os.path.join(DATA_DIR, "budzet.db")

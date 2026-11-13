@@ -8,6 +8,7 @@ import core
 import receipts as rc
 import plan as pl
 import savings as sv
+import promo as pm
 
 PORT = int(os.environ.get("BUDZET_PORT", "8765"))
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -169,7 +170,9 @@ def product_rows(conn, person=None):
 def api(method, path, q, body, raw, headers):
     conn = core.connect()
     try:
-        m = re.match(r"^/api/(\w+)(?:/(\d+))?(?:/(\w+))?$", path.replace("/receipts/rereadall", "/receipts/0/rereadall").replace("/settlements/preview", "/settlements/0/preview").replace("/rules/preview", "/rules/0/preview").replace("/categories/order", "/categories/0/order").replace("/transactions/bulk", "/transactions/0/bulk").replace("/rules/conflicts", "/rules/0/conflicts").replace("/plans/from", "/plans/0/from"))
+        m = re.match(r"^/api/(\w+)(?:/(\d+))?(?:/(\w+))?$", path.replace("/receipts/rereadall", "/receipts/0/rereadall").replace("/settlements/preview", "/settlements/0/preview").replace("/rules/preview", "/rules/0/preview").replace("/categories/order", "/categories/0/order").replace("/transactions/bulk", "/transactions/0/bulk").replace("/rules/conflicts", "/rules/0/conflicts").replace("/plans/from", "/plans/0/from")
+                     .replace("/promo/refresh", "/promo/0/refresh").replace("/promo/stores", "/promo/0/stores").replace("/promo/search", "/promo/0/search")
+                     .replace("/promo/watch", "/promo/0/watch").replace("/promo/upload", "/promo/0/upload"))
         if not m:
             raise ApiError("Nieznany adres.")
         res, oid, sub = m.group(1), int(m.group(2)) if m.group(2) else None, m.group(3)
@@ -271,6 +274,61 @@ def api(method, path, q, body, raw, headers):
             conn.commit()
             return {"ok": True}
 
+        if res == "promo":
+            if method == "GET" and sub == "search":
+                return pm.search(conn, q.get("q") or "")
+            if method == "GET":
+                person = int(q["person"]) if q.get("person") else None
+                if pm.stale(conn) and not pm.state(conn, "running") and q.get("auto") != "0":
+                    pm.refresh(core.connect)
+                return pm.report(conn, product_rows(conn, person), person)
+            if sub == "refresh":
+                started = pm.refresh(core.connect)
+                return {"started": started}
+            if sub == "stores":
+                chosen = [x for x in body.get("stores") or [] if x in pm.STORES]
+                pm.set_state(conn, "stores", chosen)
+                return {"stores": chosen}
+            if sub == "watch":
+                if body.get("remove"):
+                    conn.execute("DELETE FROM promo_watch WHERE id=?", (int(body["remove"]),))
+                else:
+                    phrase = " ".join((body.get("phrase") or "").split())
+                    if len(pm.tokens(phrase)) < 1:
+                        raise ApiError("Wpisz nazwę produktu, np. „masło” albo „kawa Lavazza”.")
+                    conn.execute("INSERT OR IGNORE INTO promo_watch(phrase,created) VALUES(?,?)", (phrase, datetime.now().isoformat(timespec="seconds")))
+                conn.commit()
+                return {"ok": True}
+            if sub == "upload":
+                name = unquote(headers.get("X-Filename", "gazetka.pdf"))
+                ext = os.path.splitext(name)[1].lower() or ".jpg"
+                if ext not in (".jpg", ".jpeg", ".png", ".heic", ".pdf", ".webp", ".tif", ".tiff"):
+                    raise ApiError("Gazetka musi być plikiem PDF albo zdjęciem.")
+                store = unquote(headers.get("X-Store", "")) or "Gazetka"
+                import hashlib, tempfile
+                ref = "upload:" + hashlib.sha1(raw).hexdigest()[:12]
+                tmp = os.path.join(core.DATA_DIR, "gazetka-tmp" + ext)
+                with open(tmp, "wb") as f:
+                    f.write(raw)
+                try:
+                    frags, engine = rc.ocr(tmp)
+                finally:
+                    try:
+                        os.remove(tmp)
+                    except OSError:
+                        pass
+                if not frags:
+                    raise ApiError("Nie udało się odczytać tekstu z gazetki." + ("" if rc.engine_status().get("ok") else " Odczyt tekstu nie jest dostępny na tym komputerze."))
+                offers = pm.from_ocr_rows(rc.to_rows(frags), store, core.parse_date(headers.get("X-From")) if headers.get("X-From") else None,
+                                          core.parse_date(headers.get("X-To")) if headers.get("X-To") else None, ref)
+                conn.execute("DELETE FROM promo_offers WHERE leaflet_id=?", (ref,))
+                now = datetime.now().isoformat(timespec="seconds")
+                for o in offers:
+                    conn.execute("INSERT OR REPLACE INTO promo_offers VALUES(:id,:source,:store,:name,:brand,:price,:old_price,:discount,:start,:end,:page,:link,:image,:leaflet_id,:note,:fetched)", dict(o, fetched=now))
+                conn.execute("INSERT OR REPLACE INTO promo_leaflets VALUES(?,?,?,?,?,?,?,?,?,?)", (ref, "upload", store, name, offers[0]["start"] if offers else None,
+                             offers[0]["end"] if offers else None, None, len(offers), None, now))
+                conn.commit()
+                return {"count": len(offers), "sample": offers[:8]}
         if res == "savings" and method == "GET":
             person = int(q["person"]) if q.get("person") else None
             return sv.analyze(conn, person, product_rows(conn, person))
@@ -681,7 +739,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    c0 = core.init_db(); pl.ensure(c0); c0.close()
+    c0 = core.init_db(); pl.ensure(c0); pm.ensure(c0); c0.close()
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     print(f"Budżet domowy {core.VERSION}: http://127.0.0.1:{PORT}", flush=True)
     srv.serve_forever()

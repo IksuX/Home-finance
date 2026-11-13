@@ -200,3 +200,16 @@ table.plan tr.mhead td { padding-top: 16px; font-size: 12px; font-weight: 600; t
 table.plan tr.done td { opacity: .6; } table.plan tr.done td:last-child { opacity: 1; }
 
 .spark rect { fill: var(--expense); opacity: .75; } .spark { display: block; margin-bottom: 3px; }
+
+.offer { display: grid; grid-template-columns: 90px minmax(0, 1fr) auto 130px 110px; gap: 10px; align-items: baseline; padding: 6px 0; border-top: 1px solid var(--line2); font-size: 14px; }
+.offer .st { font-weight: 600; font-size: 13px; } .offer .pr { text-align: right; white-space: nowrap; } .offer a { text-align: right; white-space: nowrap; }
+.offer.soon .st::after { content: ' ⏳'; font-weight: 400; }
+.pm-item { padding: 12px 0; border-top: 1px solid var(--line); } .pm-item:first-of-type { border-top: 0; }
+.pm-head { display: flex; gap: 12px; align-items: center; margin-bottom: 6px; } .pm-head > div:first-child { flex: 1; min-width: 0; }
+.pm-head .links { display: flex; gap: 10px; align-items: center; white-space: nowrap; }
+.stores { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.chipbox { display: inline-flex; gap: 5px; align-items: center; font-size: 13px; padding: 3px 10px 3px 6px; border: 1px solid var(--line); border-radius: 99px; cursor: pointer; }
+.chipbox input { accent-color: var(--accent); }
+.spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -1px; margin-right: 4px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (max-width: 760px) { .offer { grid-template-columns: 70px 1fr auto; } .offer .dt, .offer a { grid-column: 2 / -1; text-align: left; } }

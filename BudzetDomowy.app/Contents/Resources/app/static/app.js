@@ -114,12 +114,12 @@ async function render() {
   await load();
   const app = $('#app');
   if (!S.people.length) return welcome(app);
-  const nav = [['przeglad', 'Przegląd'], ['transakcje', 'Transakcje'], ['paragony', 'Paragony'], ['produkty', 'Produkty'], ['konta', 'Konta'], ['plan', 'Plan'], ['oszczednosci', 'Oszczędności'], ['rozliczenia', 'Rozliczenia'], ['import', 'Wczytaj wyciąg'], ['ustawienia', 'Ustawienia']];
+  const nav = [['przeglad', 'Przegląd'], ['transakcje', 'Transakcje'], ['paragony', 'Paragony'], ['produkty', 'Produkty'], ['konta', 'Konta'], ['plan', 'Plan'], ['oszczednosci', 'Oszczędności'], ['promocje', 'Promocje'], ['rozliczenia', 'Rozliczenia'], ['import', 'Wczytaj wyciąg'], ['ustawienia', 'Ustawienia']];
   app.innerHTML = `<div class="shell"><nav class="side"><div class="brand">Budżet domowy<small>${S.people.map(p => esc(p.name)).join(' i ')}</small></div>
     ${nav.map(([k, l]) => `<a href="#${k}" class="${view === k ? 'on' : ''}" onclick="go('${k}');return false">${l}</a>`).join('')}
     <div class="foot">wersja ${S.version}<br>Dane zostają na tym komputerze.</div></nav><main class="main" id="main"></main></div>`;
   const main = $('#main');
-  try { await ({ przeglad: vOverview, transakcje: vTx, paragony: vReceipts, produkty: vProducts, konta: vAccounts, plan: vPlan, oszczednosci: vSavings, rozliczenia: vSettle, import: vImport, ustawienia: vSettings }[view] || vOverview)(main); }
+  try { await ({ przeglad: vOverview, transakcje: vTx, paragony: vReceipts, produkty: vProducts, konta: vAccounts, plan: vPlan, oszczednosci: vSavings, promocje: vPromo, rozliczenia: vSettle, import: vImport, ustawienia: vSettings }[view] || vOverview)(main); }
   catch (e) { main.innerHTML = `<div class="panel">${esc(e.message)}</div>`; }
 }
 
