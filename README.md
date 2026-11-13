@@ -1,13 +1,14 @@
-# Budżet domowy 0.9.8
+# Budżet domowy 0.9.9
 
 Aplikacja na Maca i Windows do analizy domowego budżetu na podstawie wyciągów bankowych (mBank, ING, MT940, Revolut) i skanów paragonów.
-Gotowe paczki: `dist/BudzetDomowy-0.9.8.zip` (Mac) i `dist/BudzetDomowy-0.9.8-windows.zip` (Windows 10/11, z wbudowanym Pythonem; instrukcja w CZYTAJ.txt w archiwum). Program uruchamiający dla Windows: `windows/launcher.c`. Kod źródłowy: `BudzetDomowy.app/Contents/Resources/app`.
+Gotowe paczki: `dist/BudzetDomowy-0.9.9.zip` (Mac) i `dist/BudzetDomowy-0.9.9-windows.zip` (Windows 10/11, z wbudowanym Pythonem; instrukcja w CZYTAJ.txt w archiwum). Program uruchamiający dla Windows: `windows/launcher.c`. Kod źródłowy: `BudzetDomowy.app/Contents/Resources/app`.
 
 ## Zrzuty ekranu (dane przykładowe)
 
 ![Przegląd](docs/screenshots/1-przeglad.png)
 ![Plan](docs/screenshots/10-plan.png)
 ![Oszczędności](docs/screenshots/12-oszczednosci.png)
+![Promocje](docs/screenshots/13-promocje.png)
 ![Paragon](docs/screenshots/5-paragon.png)
 ![Produkty](docs/screenshots/6-produkty.png)
 ![Transakcje](docs/screenshots/3-transakcje.png)
@@ -98,6 +99,18 @@ Co nowego w 0.9.3
   Wpisz w Ustawieniach > Osoby imię i nazwisko każdej osoby tak, jak widnieje na przelewach – wtedy przelewy do siebie
   i między Wami są rozpoznawane po nazwisku, a wpłaty od klientów i płatności dla innych klientów mBanku liczą się normalnie.
 - Nowa kategoria przychodu "Wypłaty z firmy".
+
+Co nowego w 0.9.9
+- Nowa zakładka Promocje:
+  - program sam pobiera aktualne i nadchodzące gazetki wybranych sieci (Biedronka, Lidl, Kaufland, Netto, Dino,
+    Auchan, Carrefour, Aldi i inne) – z blix.pl, gdzie sieci publikują gazetki razem z listą produktów i cen –
+    oraz bieżące promocje spożywcze ze strony lidl.pl; odświeża je najwyżej co 12 godzin,
+  - „Wasze produkty w promocji”: produkty z paragonów kupione co najmniej dwa razy, z ceną, jaką zwykle płacicie,
+    i informacją, gdzie są teraz taniej,
+  - obserwowane produkty (np. „kawa ziarnista”, „pampers”), wyszukiwarka po wszystkich gazetkach,
+    linki do Pepper.pl i Ceneo (sklepy internetowe),
+  - wgrywanie własnej gazetki (PDF albo zdjęcie) dla sklepów spoza listy.
+  Ceny warto sprawdzić w gazetce (link przy każdej ofercie) – na paragonie i w gazetce bywa inna gramatura.
 
 Co nowego w 0.9.8
 - Nowa zakładka Oszczędności – gdzie i ile można zaoszczędzić, na podstawie 12 ostatnich pełnych miesięcy:
