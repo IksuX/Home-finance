@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS promo_offers(id TEXT PRIMARY KEY, source TEXT, store 
 CREATE TABLE IF NOT EXISTS promo_leaflets(id TEXT PRIMARY KEY, source TEXT, store TEXT, name TEXT, start TEXT, end TEXT, pages INTEGER, offers INTEGER, url TEXT, fetched TEXT);
 CREATE TABLE IF NOT EXISTS promo_watch(id INTEGER PRIMARY KEY, phrase TEXT UNIQUE, created TEXT);
 CREATE TABLE IF NOT EXISTS promo_state(key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS promo_cart(id TEXT PRIMARY KEY, store TEXT, name TEXT, price INTEGER, start TEXT, end TEXT, link TEXT, note TEXT,
+  qty INTEGER DEFAULT 1, added TEXT);
 """
 
 # sklepy na blix.pl: identyfikator w adresie → nazwa; domyślnie włączone te, w których zwykle robi się zakupy spożywcze
@@ -391,3 +393,28 @@ def from_ocr_rows(rows, store, start=None, end=None, ref="upload"):
                                    start=start, end=end, page=None, link=None, image=None, leaflet_id=ref, note="z wgranej gazetki"))
             pending = None
     return offers
+
+
+# ---------------------------------------------------------------- lista zakupów
+def cart(conn):
+    return [dict(r) for r in conn.execute("SELECT * FROM promo_cart ORDER BY store, added")]
+
+
+def cart_change(conn, body):
+    if body.get("clear"):
+        conn.execute("DELETE FROM promo_cart")
+    elif body.get("remove"):
+        conn.execute("DELETE FROM promo_cart WHERE id=?", (body["remove"],))
+    elif body.get("qty") is not None and body.get("id"):
+        q = max(1, min(99, int(body["qty"])))
+        conn.execute("UPDATE promo_cart SET qty=? WHERE id=?", (q, body["id"]))
+    elif body.get("add"):
+        o = body["add"]
+        if not (o.get("name") or "").strip():
+            raise ValueError("Brak nazwy produktu.")
+        oid = o.get("id") or ("own:" + core.norm(o["name"]))
+        conn.execute("INSERT OR IGNORE INTO promo_cart(id,store,name,price,start,end,link,note,qty,added) VALUES(?,?,?,?,?,?,?,?,1,?)",
+                     (oid, o.get("store") or "", o["name"].strip()[:120], o.get("price"), o.get("start"), o.get("end"), o.get("link"), o.get("note"),
+                      datetime.now().isoformat(timespec="seconds")))
+    conn.commit()
+    return cart(conn)

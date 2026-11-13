@@ -1,7 +1,7 @@
-# Budżet domowy 0.9.9
+# Budżet domowy 0.10.0
 
 Aplikacja na Maca i Windows do analizy domowego budżetu na podstawie wyciągów bankowych (mBank, ING, MT940, Revolut) i skanów paragonów.
-Gotowe paczki: `dist/BudzetDomowy-0.9.9.zip` (Mac) i `dist/BudzetDomowy-0.9.9-windows.zip` (Windows 10/11, z wbudowanym Pythonem; instrukcja w CZYTAJ.txt w archiwum). Program uruchamiający dla Windows: `windows/launcher.c`. Kod źródłowy: `BudzetDomowy.app/Contents/Resources/app`.
+Gotowe paczki: `dist/BudzetDomowy-0.10.0.zip` (Mac) i `dist/BudzetDomowy-0.10.0-windows.zip` (Windows 10/11, z wbudowanym Pythonem; instrukcja w CZYTAJ.txt w archiwum). Program uruchamiający dla Windows: `windows/launcher.c`. Kod źródłowy: `BudzetDomowy.app/Contents/Resources/app`.
 
 ## Zrzuty ekranu (dane przykładowe)
 
@@ -99,6 +99,14 @@ Co nowego w 0.9.3
   Wpisz w Ustawieniach > Osoby imię i nazwisko każdej osoby tak, jak widnieje na przelewach – wtedy przelewy do siebie
   i między Wami są rozpoznawane po nazwisku, a wpłaty od klientów i płatności dla innych klientów mBanku liczą się normalnie.
 - Nowa kategoria przychodu "Wypłaty z firmy".
+
+Co nowego w 0.10.0
+- Lista zakupów w zakładce Promocje: przycisk „+” przy każdej ofercie, dopisywanie własnych pozycji, ilości,
+  podział na sklepy i szacunkowa kwota.
+- Eksport listy: „Kopiuj listę” (pozycja w linii, opcjonalnie ze sklepem, ceną i terminem promocji),
+  „Kopiuj w jednej linii” (po przecinku), „Udostępnij…”, „Wyślij e-mailem” i plik .txt.
+  Listonic nie ma importu z innych programów – listę wkleja się w pole dodawania produktu
+  (Przypomnienia, Notatki, Google Keep i Todoist dzielą wklejony tekst na pozycje same).
 
 Co nowego w 0.9.9
 - Nowa zakładka Promocje:

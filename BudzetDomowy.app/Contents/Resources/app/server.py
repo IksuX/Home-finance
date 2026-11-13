@@ -172,7 +172,7 @@ def api(method, path, q, body, raw, headers):
     try:
         m = re.match(r"^/api/(\w+)(?:/(\d+))?(?:/(\w+))?$", path.replace("/receipts/rereadall", "/receipts/0/rereadall").replace("/settlements/preview", "/settlements/0/preview").replace("/rules/preview", "/rules/0/preview").replace("/categories/order", "/categories/0/order").replace("/transactions/bulk", "/transactions/0/bulk").replace("/rules/conflicts", "/rules/0/conflicts").replace("/plans/from", "/plans/0/from")
                      .replace("/promo/refresh", "/promo/0/refresh").replace("/promo/stores", "/promo/0/stores").replace("/promo/search", "/promo/0/search")
-                     .replace("/promo/watch", "/promo/0/watch").replace("/promo/upload", "/promo/0/upload"))
+                     .replace("/promo/watch", "/promo/0/watch").replace("/promo/cart", "/promo/0/cart").replace("/promo/upload", "/promo/0/upload"))
         if not m:
             raise ApiError("Nieznany adres.")
         res, oid, sub = m.group(1), int(m.group(2)) if m.group(2) else None, m.group(3)
@@ -275,13 +275,20 @@ def api(method, path, q, body, raw, headers):
             return {"ok": True}
 
         if res == "promo":
+            if sub == "cart":
+                if method == "GET":
+                    return pm.cart(conn)
+                try:
+                    return pm.cart_change(conn, body)
+                except ValueError as e:
+                    raise ApiError(str(e))
             if method == "GET" and sub == "search":
                 return pm.search(conn, q.get("q") or "")
             if method == "GET":
                 person = int(q["person"]) if q.get("person") else None
                 if pm.stale(conn) and not pm.state(conn, "running") and q.get("auto") != "0":
                     pm.refresh(core.connect)
-                return pm.report(conn, product_rows(conn, person), person)
+                return dict(pm.report(conn, product_rows(conn, person), person), cart=pm.cart(conn))
             if sub == "refresh":
                 started = pm.refresh(core.connect)
                 return {"started": started}
