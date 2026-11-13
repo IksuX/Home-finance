@@ -1,12 +1,13 @@
-# Budżet domowy 0.9.7
+# Budżet domowy 0.9.8
 
 Aplikacja na Maca i Windows do analizy domowego budżetu na podstawie wyciągów bankowych (mBank, ING, MT940, Revolut) i skanów paragonów.
-Gotowe paczki: `dist/BudzetDomowy-0.9.7.zip` (Mac) i `dist/BudzetDomowy-0.9.7-windows.zip` (Windows 10/11, z wbudowanym Pythonem; instrukcja w CZYTAJ.txt w archiwum). Program uruchamiający dla Windows: `windows/launcher.c`. Kod źródłowy: `BudzetDomowy.app/Contents/Resources/app`.
+Gotowe paczki: `dist/BudzetDomowy-0.9.8.zip` (Mac) i `dist/BudzetDomowy-0.9.8-windows.zip` (Windows 10/11, z wbudowanym Pythonem; instrukcja w CZYTAJ.txt w archiwum). Program uruchamiający dla Windows: `windows/launcher.c`. Kod źródłowy: `BudzetDomowy.app/Contents/Resources/app`.
 
 ## Zrzuty ekranu (dane przykładowe)
 
 ![Przegląd](docs/screenshots/1-przeglad.png)
 ![Plan](docs/screenshots/10-plan.png)
+![Oszczędności](docs/screenshots/12-oszczednosci.png)
 ![Paragon](docs/screenshots/5-paragon.png)
 ![Produkty](docs/screenshots/6-produkty.png)
 ![Transakcje](docs/screenshots/3-transakcje.png)
@@ -97,6 +98,15 @@ Co nowego w 0.9.3
   Wpisz w Ustawieniach > Osoby imię i nazwisko każdej osoby tak, jak widnieje na przelewach – wtedy przelewy do siebie
   i między Wami są rozpoznawane po nazwisku, a wpłaty od klientów i płatności dla innych klientów mBanku liczą się normalnie.
 - Nowa kategoria przychodu "Wypłaty z firmy".
+
+Co nowego w 0.9.8
+- Nowa zakładka Oszczędności – gdzie i ile można zaoszczędzić, na podstawie 12 ostatnich pełnych miesięcy:
+  - typowy miesiąc (mediana wpływów i wydatków) i cel: ile brakuje, żeby odkładać 5, 10, 15 lub 20% dochodów,
+  - stałe opłaty i subskrypcje z kosztem rocznym i wykrywaniem podwyżek – zaznacz, z czego rezygnujesz,
+  - kategorie do ograniczenia (restauracje, zakupy online, ubrania…): wybierz −10/−20/−30% i ustaw to jako limit,
+  - co ostatnio rośnie, drobne zakupy do 30 zł, opłaty bankowe po odjęciu zwrotów,
+  - te same produkty z paragonów taniej w innym sklepie,
+  - podsumowanie wybranych oszczędności miesięcznie i rocznie.
 
 Co nowego w 0.9.7
 - Wersja na Windows 10 i 11 (osobne archiwum BudzetDomowy-0.9.7-windows.zip).

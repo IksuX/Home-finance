@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 import core
 import receipts as rc
 import plan as pl
+import savings as sv
 
 PORT = int(os.environ.get("BUDZET_PORT", "8765"))
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -270,6 +271,9 @@ def api(method, path, q, body, raw, headers):
             conn.commit()
             return {"ok": True}
 
+        if res == "savings" and method == "GET":
+            person = int(q["person"]) if q.get("person") else None
+            return sv.analyze(conn, person, product_rows(conn, person))
         if res == "plan" and method == "GET":
             return pl.report(conn, max(1, min(24, int(q.get("months") or 6))), int(q["person"]) if q.get("person") else None)
         if res == "plans" and method == "POST" and sub == "from":

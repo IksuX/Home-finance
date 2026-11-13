@@ -126,8 +126,9 @@ def _by_months(byday, days, ref):
     return "monthly", [date.fromisoformat(hits[m][0]) for m in months], amts
 
 
-def detect(conn, today=None):
-    """Płatności i wpływy, które powtarzają się regularnie u tego samego odbiorcy."""
+def detect(conn, today=None, everything=False):
+    """Płatności i wpływy, które powtarzają się regularnie u tego samego odbiorcy.
+    everything=True – także te już w planie albo pominięte (do analizy oszczędności)."""
     today = today or date.today()
     last_tx = conn.execute("SELECT MAX(date) d FROM transactions").fetchone()["d"]
     ref = min(today, date.fromisoformat(last_tx)) if last_tx else today
@@ -158,10 +159,10 @@ def detect(conn, today=None):
         if (ref - ds[-1]).days > period * 1.6 + 5:      # przestało się powtarzać
             continue
         key = f"{k}|{'+' if pos else '-'}"
-        if key in ignored:
+        if key in ignored and not everything:
             continue
         last_t = byday[days[-1]][-1]
-        if any(m(last_t) for m in planned):
+        if not everything and any(m(last_t) for m in planned):
             continue
         nxt = step(ds[-1], freq)
         while nxt < ref - timedelta(days=3):
@@ -173,7 +174,7 @@ def detect(conn, today=None):
         out.append(dict(key=key, name=nice[:40], phrase=k, amount=typical, variable=spread > 0.1, freq=freq, freq_label=FREQ[freq][0],
                         count=len(ds), last=days[-1], next=nxt.isoformat(), min=min(recent), max=max(recent),
                         category_id=max(set(cats), key=cats.count) if cats else None, person_id=last_t["person_id"],
-                        monthly=round(typical * 30.4 / period)))
+                        monthly=round(typical * 30.4 / period), history=list(zip(days[-12:], amounts[-12:]))))
     out.sort(key=lambda s: s["monthly"])      # największe wydatki (najbardziej ujemne) na górze, przychody na końcu
     return out
 

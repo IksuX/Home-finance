@@ -198,3 +198,5 @@ table.cmp .dbar { width: 22%; } .dbar div { height: 8px; border-radius: 4px; } .
 table.plan td { vertical-align: middle; padding-top: 8px; padding-bottom: 8px; }
 table.plan tr.mhead td { padding-top: 16px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); border-bottom: 1px solid var(--line); }
 table.plan tr.done td { opacity: .6; } table.plan tr.done td:last-child { opacity: 1; }
+
+.spark rect { fill: var(--expense); opacity: .75; } .spark { display: block; margin-bottom: 3px; }
